@@ -63,7 +63,7 @@ const ItineraryForm = ({ onSubmit }) => {
         {/* Budget */}
         <div className="relative md:col-span-1">
             <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
-            <input type="number" name="budget" placeholder="Budget ($)" min="0" value={formData.budget} onChange={handleChange} required className="w-full pl-10 pr-3 py-3 text-sm text-gray-700 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <input type="number" name="budget" placeholder="Budget (₹)" min="0" value={formData.budget} onChange={handleChange} required className="w-full pl-10 pr-3 py-3 text-sm text-gray-700 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </div>
         
         {/* Mode of Transport */}
