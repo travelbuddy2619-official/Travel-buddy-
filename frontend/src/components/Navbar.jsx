@@ -1,10 +1,10 @@
     import React, { useState } from 'react';
     import { motion } from 'framer-motion';
-    import { Menu, X } from 'lucide-react';
+    import { Menu, X, Plane, Hotel } from 'lucide-react';
+    import { Link } from 'react-router-dom';
     
     const Navbar = () => {
       const [isOpen, setIsOpen] = useState(false);
-      const navLinks = ["Explore", "Travel Guides", "Hotels", "Activities"];
     
       const menuVariants = {
         hidden: { opacity: 0, y: -20 },
@@ -23,9 +23,10 @@
               initial={{ opacity: 0, x: -50 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.5 }}
-              className="text-2xl font-bold text-white"
             >
-              TravelAI
+              <Link to="/" className="text-2xl font-bold text-white">
+                TravelAI
+              </Link>
             </motion.div>
     
             {/* Desktop Menu */}
@@ -33,19 +34,33 @@
               variants={menuVariants}
               initial="hidden"
               animate="visible"
-              className="hidden md:flex items-center space-x-8"
+              className="hidden md:flex items-center space-x-6"
             >
-              {navLinks.map((link) => (
-                <motion.li key={link} variants={linkVariants}>
-                  <a href="#" className="text-white hover:text-gray-200 transition-colors">
-                    {link}
-                  </a>
-                </motion.li>
-              ))}
               <motion.li variants={linkVariants}>
-                <button className="bg-white text-blue-600 font-semibold px-5 py-2 rounded-full hover:bg-gray-100 transition-all">
+                <Link 
+                  to="/travel" 
+                  className="flex items-center gap-2 text-white hover:text-gray-200 transition-colors bg-white/10 backdrop-blur-sm px-4 py-2 rounded-full"
+                >
+                  <Plane className="w-4 h-4" />
+                  Flights & Trains
+                </Link>
+              </motion.li>
+              <motion.li variants={linkVariants}>
+                <Link 
+                  to="/hotels" 
+                  className="flex items-center gap-2 text-white hover:text-gray-200 transition-colors bg-white/10 backdrop-blur-sm px-4 py-2 rounded-full"
+                >
+                  <Hotel className="w-4 h-4" />
+                  Hotels
+                </Link>
+              </motion.li>
+              <motion.li variants={linkVariants}>
+                <a 
+                  href="#itinerary-form" 
+                  className="bg-white text-blue-600 font-semibold px-5 py-2 rounded-full hover:bg-gray-100 transition-all"
+                >
                   Start Planning
-                </button>
+                </a>
               </motion.li>
             </motion.ul>
     
@@ -65,17 +80,34 @@
               className="md:hidden bg-white/10 backdrop-blur-md"
             >
               <ul className="flex flex-col items-center space-y-4 py-6">
-                {navLinks.map((link) => (
-                  <li key={link}>
-                    <a href="#" className="text-white hover:text-gray-200" onClick={() => setIsOpen(false)}>
-                      {link}
-                    </a>
-                  </li>
-                ))}
                 <li>
-                  <button className="bg-white text-blue-600 font-semibold px-5 py-2 rounded-full w-full">
+                  <Link 
+                    to="/travel" 
+                    className="flex items-center gap-2 text-white hover:text-gray-200" 
+                    onClick={() => setIsOpen(false)}
+                  >
+                    <Plane className="w-4 h-4" />
+                    Flights & Trains
+                  </Link>
+                </li>
+                <li>
+                  <Link 
+                    to="/hotels" 
+                    className="flex items-center gap-2 text-white hover:text-gray-200" 
+                    onClick={() => setIsOpen(false)}
+                  >
+                    <Hotel className="w-4 h-4" />
+                    Hotels
+                  </Link>
+                </li>
+                <li>
+                  <a 
+                    href="#itinerary-form" 
+                    className="bg-white text-blue-600 font-semibold px-5 py-2 rounded-full"
+                    onClick={() => setIsOpen(false)}
+                  >
                     Start Planning
-                  </button>
+                  </a>
                 </li>
               </ul>
             </motion.div>

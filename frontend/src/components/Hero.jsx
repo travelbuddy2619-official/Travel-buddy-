@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 const Hero = ({ onItinerarySubmit }) => {
   return (
     // The main container needs to be relative to position the video and overlay
-    <section className="relative flex items-center justify-center h-screen bg-gray-900 text-white">
+    <section id="home" data-section="home" className="relative flex items-center justify-center h-screen bg-gray-900 text-white">
       {/* Background Video */}
       <video
         autoPlay
@@ -44,7 +44,9 @@ const Hero = ({ onItinerarySubmit }) => {
         </motion.p>
 
         {/* The ItineraryForm is passed the onItinerarySubmit function */}
-        <ItineraryForm onSubmit={onItinerarySubmit} />
+        <div id="itinerary-form" data-section="itinerary-form">
+          <ItineraryForm onSubmit={onItinerarySubmit} />
+        </div>
       </div>
     </section>
   );
