@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { MapPin, Star, Sun, Thermometer, Utensils, Clock, Camera, Navigation, Lightbulb, Briefcase, Phone, Globe, IndianRupee, AlertTriangle, Info, Ticket, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { MapPin, Star, Sun, Thermometer, Utensils, Clock, Camera, Navigation, Lightbulb, Briefcase, Phone, Globe, IndianRupee, AlertTriangle, Info, Ticket, X, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Image Lightbox Modal Component
@@ -708,6 +708,23 @@ const ScheduleItem = ({ item, isFirst, isLast }) => {
     );
 };
 
+const isMealScheduleItem = (item) => (
+    item?.isMeal || item?.is_meal ||
+    ['breakfast', 'lunch', 'dinner', 'brunch', 'snack', 'tea'].some(
+        (m) => item?.activity?.toLowerCase().includes(m)
+    )
+);
+
+const getDayHeroImage = (dayPlan) => {
+    if (dayPlan?.locationInsight?.photos?.[0]) return dayPlan.locationInsight.photos[0];
+
+    const scheduleImage = dayPlan?.schedule?.find((item) => item?.place?.images?.[0] || item?.restaurant?.images?.[0]);
+    if (scheduleImage?.place?.images?.[0]) return scheduleImage.place.images[0];
+    if (scheduleImage?.restaurant?.images?.[0]) return scheduleImage.restaurant.images[0];
+
+    return null;
+};
+
 const ItineraryResult = ({ data }) => {
     if (!data) return null;
 
@@ -725,6 +742,94 @@ const ItineraryResult = ({ data }) => {
     // New multi-agent data
     const weather = data.weather;
     const cityHighlights = data.cityHighlights;
+    const days = data.days || [];
+
+    const [activeDay, setActiveDay] = useState(days[0]?.day || 1);
+    const [collapsedDays, setCollapsedDays] = useState({});
+
+    const dayThemes = [
+        {
+            ring: 'ring-cyan-200',
+            badge: 'from-cyan-500 to-blue-500',
+            accent: 'text-cyan-700',
+            chip: 'bg-cyan-50 text-cyan-700 border-cyan-200',
+            surface: 'from-cyan-50 via-white to-blue-50',
+            glow: 'shadow-cyan-100',
+            emoji: '🌊',
+            label: 'Coastal Flow'
+        },
+        {
+            ring: 'ring-rose-200',
+            badge: 'from-rose-500 to-orange-500',
+            accent: 'text-rose-700',
+            chip: 'bg-rose-50 text-rose-700 border-rose-200',
+            surface: 'from-rose-50 via-white to-orange-50',
+            glow: 'shadow-rose-100',
+            emoji: '🌇',
+            label: 'Sunset Trail'
+        },
+        {
+            ring: 'ring-violet-200',
+            badge: 'from-violet-500 to-fuchsia-500',
+            accent: 'text-violet-700',
+            chip: 'bg-violet-50 text-violet-700 border-violet-200',
+            surface: 'from-violet-50 via-white to-fuchsia-50',
+            glow: 'shadow-violet-100',
+            emoji: '🎭',
+            label: 'Culture Arc'
+        },
+        {
+            ring: 'ring-emerald-200',
+            badge: 'from-emerald-500 to-teal-500',
+            accent: 'text-emerald-700',
+            chip: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+            surface: 'from-emerald-50 via-white to-teal-50',
+            glow: 'shadow-emerald-100',
+            emoji: '🌿',
+            label: 'Nature Pulse'
+        }
+    ];
+
+    useEffect(() => {
+        const firstDay = days[0]?.day || 1;
+        setActiveDay(firstDay);
+        setCollapsedDays({});
+    }, [data]);
+
+    useEffect(() => {
+        const onKeydown = (e) => {
+            if (e.key === 'ArrowRight') goToNextDay();
+            if (e.key === 'ArrowLeft') goToPrevDay();
+        };
+
+        window.addEventListener('keydown', onKeydown);
+        return () => window.removeEventListener('keydown', onKeydown);
+    }, [activeDay, days]);
+
+    const scrollToDay = (dayNumber) => {
+        setActiveDay(dayNumber);
+    };
+
+    const goToNextDay = () => {
+        const currentIndex = days.findIndex((d) => d.day === activeDay);
+        if (currentIndex >= 0 && currentIndex < days.length - 1) {
+            scrollToDay(days[currentIndex + 1].day);
+        }
+    };
+
+    const goToPrevDay = () => {
+        const currentIndex = days.findIndex((d) => d.day === activeDay);
+        if (currentIndex > 0) {
+            scrollToDay(days[currentIndex - 1].day);
+        }
+    };
+
+    const activeIndex = Math.max(0, days.findIndex((d) => d.day === activeDay));
+    const progressPct = days.length > 1 ? (activeIndex / (days.length - 1)) * 100 : 100;
+
+    const toggleDayCollapse = (dayNumber) => {
+        setCollapsedDays((prev) => ({ ...prev, [dayNumber]: !prev[dayNumber] }));
+    };
 
     return (
         <div className="bg-slate-50 font-sans">
@@ -1069,32 +1174,148 @@ const ItineraryResult = ({ data }) => {
                     </motion.div>
                 )}
 
-                {/* Day Cards */}
-                {data.days?.map((dayPlan) => (
-                    <motion.div key={dayPlan.day} variants={itemVariants} className="bg-white border border-gray-100 rounded-3xl shadow-sm p-6 space-y-6">
-                        {/* Day Header */}
-                        <div className="flex items-center justify-between flex-wrap gap-4 border-b border-gray-100 pb-4">
-                            <div>
-                                <div className="flex items-center gap-3">
-                                    <span className="bg-gradient-to-r from-cyan-500 to-blue-500 text-white text-sm font-bold px-3 py-1 rounded-full">
-                                        Day {dayPlan.day}
-                                    </span>
-                                    {dayPlan.date && (
-                                        <span className="text-sm text-gray-500">{formatDate(dayPlan.date)}</span>
-                                    )}
+                {/* Day Navigator + Horizontal Day Cards */}
+                {days.length > 0 && (
+                    <motion.div variants={itemVariants} className="space-y-4">
+                        <div className="z-20 bg-white/95 backdrop-blur border border-gray-100 rounded-2xl shadow-sm p-4 space-y-3">
+                            <div className="flex items-center justify-between gap-3 flex-wrap">
+                                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                                    {days.map((day) => (
+                                        <button
+                                            key={day.day}
+                                            onClick={() => scrollToDay(day.day)}
+                                            className={`px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                                                activeDay === day.day
+                                                    ? 'bg-cyan-600 text-white scale-105 shadow-md'
+                                                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                            }`}
+                                        >
+                                            Day {day.day}
+                                        </button>
+                                    ))}
                                 </div>
-                                <h2 className="text-2xl font-bold text-slate-800 mt-2">{dayPlan.title || dayPlan.theme || `Day ${dayPlan.day} Activities`}</h2>
-                                {dayPlan.summary && (
-                                    <p className="text-gray-600 mt-1">{dayPlan.summary}</p>
-                                )}
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={goToPrevDay}
+                                        disabled={activeDay === days[0]?.day}
+                                        className="inline-flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                                    >
+                                        <ChevronLeft className="w-4 h-4" /> Prev
+                                    </button>
+                                    <button
+                                        onClick={goToNextDay}
+                                        disabled={activeDay === days[days.length - 1]?.day}
+                                        className="inline-flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                                    >
+                                        Next <ChevronRight className="w-4 h-4" />
+                                    </button>
+                                </div>
                             </div>
-                            {dayPlan.estimatedCost && (
-                                <div className="bg-emerald-50 px-4 py-2 rounded-xl">
-                                    <p className="text-xs text-emerald-600 uppercase">Est. Cost</p>
-                                    <p className="font-bold text-emerald-700">{dayPlan.estimatedCost}</p>
+                            <div className="flex items-center justify-between text-xs text-slate-500">
+                                <span>Swipe cards or use keyboard arrows</span>
+                                <span>Story Mode</span>
+                            </div>
+                            <div className="space-y-1">
+                                <div className="flex items-center justify-between text-xs text-slate-500">
+                                    <span>Journey Progress</span>
+                                    <span>Day {activeDay} of {days.length}</span>
                                 </div>
-                            )}
+                                <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                    <motion.div
+                                        className="h-full bg-gradient-to-r from-cyan-500 via-indigo-500 to-fuchsia-500"
+                                        animate={{ width: `${progressPct}%` }}
+                                        transition={{ duration: 0.35, ease: 'easeOut' }}
+                                    />
+                                </div>
+                            </div>
                         </div>
+
+                        <div className="pb-2">
+                            {days.filter((day) => day.day === activeDay).map((dayPlan, index) => {
+                                const theme = dayThemes[index % dayThemes.length];
+                                const heroImage = getDayHeroImage(dayPlan);
+                                const totalStops = dayPlan.schedule?.length || 0;
+                                const mealStops = dayPlan.schedule?.filter(isMealScheduleItem).length || 0;
+                                return (
+                                    <motion.div
+                                        key={dayPlan.day}
+                                        variants={itemVariants}
+                                        className={`relative self-start h-auto min-h-0 overflow-hidden w-full flex-shrink-0 basis-full snap-start bg-gradient-to-br ${theme.surface} border border-gray-100 ring-1 ${theme.ring} rounded-3xl shadow-xl ${theme.glow} p-6 space-y-6`}
+                                    >
+                                        <div className="absolute right-4 top-3 text-5xl opacity-10 select-none pointer-events-none">{theme.emoji}</div>
+                                        <div className={`absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r ${theme.badge}`} />
+
+                                        {heroImage && (
+                                            <div className="relative mb-2 h-44 md:h-52 rounded-2xl overflow-hidden">
+                                                <img
+                                                    src={heroImage}
+                                                    alt={dayPlan.title || dayPlan.theme || `Day ${dayPlan.day}`}
+                                                    className="w-full h-full object-cover"
+                                                    onError={(e) => {
+                                                        e.currentTarget.style.display = 'none';
+                                                    }}
+                                                />
+                                                <div className="absolute inset-0 bg-gradient-to-t from-black/65 via-black/20 to-black/5" />
+                                                <div className="absolute left-4 bottom-4 right-4 flex items-end justify-between gap-3">
+                                                    <div>
+                                                        <p className="text-white/80 text-xs uppercase tracking-wide">Day Story</p>
+                                                        <h3 className="text-white text-lg md:text-xl font-bold line-clamp-1">
+                                                            {dayPlan.title || dayPlan.theme || `Day ${dayPlan.day} Highlights`}
+                                                        </h3>
+                                                    </div>
+                                                    <span className="text-xs text-white bg-white/20 backdrop-blur px-2 py-1 rounded-full whitespace-nowrap">
+                                                        {theme.label}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Day Header */}
+                                        <div className="flex items-center justify-between flex-wrap gap-4 border-b border-gray-100 pb-4">
+                                            <div>
+                                                <div className="flex items-center gap-3 flex-wrap">
+                                                    <span className={`bg-gradient-to-r ${theme.badge} text-white text-sm font-bold px-3 py-1 rounded-full`}>
+                                                        Day {dayPlan.day}
+                                                    </span>
+                                                    {dayPlan.date && (
+                                                        <span className="text-sm text-gray-500">{formatDate(dayPlan.date)}</span>
+                                                    )}
+                                                    <span className={`text-xs border px-2 py-0.5 rounded-full ${theme.chip}`}>
+                                                        {theme.label}
+                                                    </span>
+                                                    <span className="text-xs border border-slate-200 bg-white px-2 py-0.5 rounded-full text-slate-600">
+                                                        {totalStops} stops
+                                                    </span>
+                                                    <span className="text-xs border border-orange-200 bg-orange-50 px-2 py-0.5 rounded-full text-orange-700">
+                                                        {mealStops} food breaks
+                                                    </span>
+                                                </div>
+                                                <h2 className={`text-2xl font-bold text-slate-800 mt-2 ${theme.accent}`}>
+                                                    {dayPlan.title || dayPlan.theme || `Day ${dayPlan.day} Activities`}
+                                                </h2>
+                                                {dayPlan.summary && (
+                                                    <p className="text-gray-600 mt-1">{dayPlan.summary}</p>
+                                                )}
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                {dayPlan.estimatedCost && (
+                                                    <div className="bg-emerald-50 px-4 py-2 rounded-xl">
+                                                        <p className="text-xs text-emerald-600 uppercase">Est. Cost</p>
+                                                        <p className="font-bold text-emerald-700">{dayPlan.estimatedCost}</p>
+                                                    </div>
+                                                )}
+                                                <button
+                                                    onClick={() => toggleDayCollapse(dayPlan.day)}
+                                                    className="inline-flex items-center gap-1 text-sm px-3 py-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200"
+                                                >
+                                                    {collapsedDays[dayPlan.day] ? 'Expand' : 'Collapse'}
+                                                    {collapsedDays[dayPlan.day] ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {!collapsedDays[dayPlan.day] && (
+                                            <>
 
                         {/* Weather */}
                         {dayPlan.locationInsight?.weather?.length > 0 && (
@@ -1181,8 +1402,29 @@ const ItineraryResult = ({ data }) => {
                                 </div>
                             </div>
                         )}
+                                            </>
+                                        )}
+                                    </motion.div>
+                                );
+                            })}
+                        </div>
+
+                        <div className="flex items-center justify-center gap-2">
+                            {days.map((day) => (
+                                <button
+                                    key={`dot-${day.day}`}
+                                    onClick={() => scrollToDay(day.day)}
+                                    aria-label={`Go to day ${day.day}`}
+                                    className={`h-2.5 rounded-full transition-all ${
+                                        activeDay === day.day
+                                            ? 'w-8 bg-indigo-600'
+                                            : 'w-2.5 bg-slate-300 hover:bg-slate-400'
+                                    }`}
+                                />
+                            ))}
+                        </div>
                     </motion.div>
-                ))}
+                )}
 
                 {/* Travel Tips & Packing - supports both old and new data structure */}
                 {(data.travelTips?.length > 0 || data.packingSuggestions?.length > 0 || data.packingList?.length > 0) && (

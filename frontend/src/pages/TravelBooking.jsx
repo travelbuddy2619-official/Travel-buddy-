@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
     Plane, Train, Bus, Search, Calendar, Users, IndianRupee, 
@@ -22,6 +22,32 @@ const TravelBooking = () => {
     const [loading, setLoading] = useState(false);
     const [activeTab, setActiveTab] = useState('all');
     const [error, setError] = useState(null);
+
+    useEffect(() => {
+        try {
+            const savedState = localStorage.getItem('travelai_travel_state');
+            if (!savedState) return;
+            const parsed = JSON.parse(savedState);
+            if (parsed?.searchParams) setSearchParams(parsed.searchParams);
+            if (parsed?.results) setResults(parsed.results);
+            if (parsed?.activeTab) setActiveTab(parsed.activeTab);
+        } catch (e) {
+            console.warn('Failed to restore travel state:', e);
+        }
+    }, []);
+
+    useEffect(() => {
+        try {
+            const stateToPersist = {
+                searchParams,
+                results,
+                activeTab,
+            };
+            localStorage.setItem('travelai_travel_state', JSON.stringify(stateToPersist));
+        } catch (e) {
+            console.warn('Failed to persist travel state:', e);
+        }
+    }, [searchParams, results, activeTab]);
 
     const handleSearch = async (e) => {
         e.preventDefault();

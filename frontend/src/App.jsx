@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Navbar from './components/Navbar';
 import Hero from './components/Hero';
@@ -25,6 +25,32 @@ function HomePage() {
   const [tripRequest, setTripRequest] = useState(null);
   const [error, setError] = useState(null);
   const [sessionId, setSessionId] = useState(null);
+
+  useEffect(() => {
+    try {
+      const savedState = localStorage.getItem('travelai_home_state');
+      if (!savedState) return;
+      const parsed = JSON.parse(savedState);
+      if (parsed?.itinerary) setItinerary(parsed.itinerary);
+      if (parsed?.tripRequest) setTripRequest(parsed.tripRequest);
+      if (parsed?.sessionId) setSessionId(parsed.sessionId);
+    } catch (e) {
+      console.warn('Failed to restore home state:', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const stateToPersist = {
+        itinerary,
+        tripRequest,
+        sessionId,
+      };
+      localStorage.setItem('travelai_home_state', JSON.stringify(stateToPersist));
+    } catch (e) {
+      console.warn('Failed to persist home state:', e);
+    }
+  }, [itinerary, tripRequest, sessionId]);
 
   const handleFormSubmit = async (formData) => {
     setLoading(true);
