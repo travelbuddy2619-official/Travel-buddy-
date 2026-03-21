@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 
@@ -46,6 +47,7 @@ class AgentOrchestrator:
         self.weather_api_key = weather_api_key
         self.rapidapi_key = rapidapi_key
         self.model = model
+        self.enable_planning_intelligence = os.getenv("ENABLE_PLANNING_INTELLIGENCE", "true").lower() == "true"
         
         # Initialize LLM client for main planning
         self.llm_client = AsyncGroq(api_key=groq_api_key)
@@ -118,17 +120,21 @@ class AgentOrchestrator:
             print(f"   ✓ City Explorer Agent: Found {len(city_data.get('famous_food', []))} famous foods")
             
             # ===== PHASE 1.5: Generate Planning Intelligence =====
-            print("\n🧠 [Phase 1.5] Generating Planning Intelligence...")
-            planning_insights = await self._generate_planning_intelligence(
-                destination=destination,
-                start_date=start_date,
-                end_date=end_date,
-                budget=budget,
-                interests=interests,
-                weather_data=weather_data,
-                city_data=city_data,
-            )
-            print(f"   ✓ Planning intelligence generated")
+            planning_insights = None
+            if self.enable_planning_intelligence:
+                print("\n🧠 [Phase 1.5] Generating Planning Intelligence...")
+                planning_insights = await self._generate_planning_intelligence(
+                    destination=destination,
+                    start_date=start_date,
+                    end_date=end_date,
+                    budget=budget,
+                    interests=interests,
+                    weather_data=weather_data,
+                    city_data=city_data,
+                )
+                print("   ✓ Planning intelligence generated")
+            else:
+                print("\n🧠 [Phase 1.5] Skipped extra planning intelligence (fast mode)")
             
             # ===== PHASE 2: Generate Base Itinerary =====
             print("\n📝 [Phase 2] Generating Optimized Itinerary...")
@@ -565,11 +571,28 @@ Return ONLY valid JSON. Be specific to {destination}."""
         
         # Collect all unique places
         places_to_enrich = []
+        skip_keywords = {
+            "hotel",
+            "room",
+            "check-in",
+            "checkout",
+            "check out",
+            "arrival",
+            "departure",
+            "airport",
+            "station",
+            "transfer",
+            "taxi",
+            "cab",
+            "rest",
+        }
         for day in itinerary.get("days", []):
             for slot in day.get("schedule", []):
                 if slot.get("place") and not slot.get("isMeal"):
                     place_name = slot["place"].get("name", "")
-                    if place_name and place_name not in [p["name"] for p in places_to_enrich]:
+                    place_name_lower = place_name.lower()
+                    should_skip = any(k in place_name_lower for k in skip_keywords)
+                    if place_name and not should_skip and place_name not in [p["name"] for p in places_to_enrich]:
                         places_to_enrich.append({
                             "name": place_name,
                             "day": day.get("day"),
@@ -577,23 +600,31 @@ Return ONLY valid JSON. Be specific to {destination}."""
                         })
         
         print(f"   Enriching {len(places_to_enrich)} unique places...")
-        
+
         # Create tasks for parallel enrichment
+        place_sem = asyncio.Semaphore(5)
+
         async def enrich_single_place(place_info):
             place_name = place_info["name"]
-            
-            # Run all three agents in parallel for each place
-            research_task = asyncio.create_task(
-                self.place_research_agent.research_place(place_name, destination)
-            )
-            photo_task = asyncio.create_task(
-                self.photo_review_agent.research_place(place_name, destination)
-            )
-            crowd_task = asyncio.create_task(
-                self.place_research_agent.get_crowd_predictions(place_name, destination)
-            )
-            
-            research_data, photo_data, crowd_data = await asyncio.gather(research_task, photo_task, crowd_task)
+
+            async with place_sem:
+                # Run all three agents in parallel for each place
+                research_task = asyncio.create_task(
+                    self.place_research_agent.research_place(place_name, destination)
+                )
+                photo_task = asyncio.create_task(
+                    self.photo_review_agent.research_place(place_name, destination)
+                )
+                crowd_task = asyncio.create_task(
+                    self.place_research_agent.get_crowd_predictions(place_name, destination)
+                )
+
+                research_data, photo_data, crowd_data = await asyncio.gather(
+                    research_task,
+                    photo_task,
+                    crowd_task,
+                    return_exceptions=False,
+                )
             
             return {
                 "name": place_name,
@@ -601,18 +632,15 @@ Return ONLY valid JSON. Be specific to {destination}."""
                 "photos": photo_data,
                 "crowd": crowd_data
             }
-        
-        # Run all place enrichments (with some parallelism limit)
-        batch_size = 3  # Process 3 places at a time
+
+        # Run all place enrichments with bounded concurrency.
         all_enriched = {}
-        
-        for i in range(0, len(places_to_enrich), batch_size):
-            batch = places_to_enrich[i:i+batch_size]
-            tasks = [enrich_single_place(p) for p in batch]
-            results = await asyncio.gather(*tasks)
-            
-            for r in results:
-                all_enriched[r["name"]] = r
+
+        tasks = [enrich_single_place(p) for p in places_to_enrich]
+        results = await asyncio.gather(*tasks)
+
+        for r in results:
+            all_enriched[r["name"]] = r
         
         # Apply enrichment to itinerary
         for day in itinerary.get("days", []):
@@ -673,27 +701,22 @@ Return ONLY valid JSON. Be specific to {destination}."""
         
         print(f"   Finding restaurants for {len(meal_slots)} meals...")
         
-        # Create restaurant finding tasks
+        meal_sem = asyncio.Semaphore(6)
+
         async def find_restaurant_for_meal(meal_info):
-            restaurant = await self.dining_agent.find_meal_restaurant(
-                location=destination,
-                meal_type=meal_info["meal_type"]
-            )
+            async with meal_sem:
+                restaurant = await self.dining_agent.find_meal_restaurant(
+                    location=destination,
+                    meal_type=meal_info["meal_type"]
+                )
             return {
                 "day": meal_info["day"],
                 "meal_type": meal_info["meal_type"],
                 "restaurant": restaurant
             }
-        
-        # Process meals in batches
-        batch_size = 4
-        all_restaurants = []
-        
-        for i in range(0, len(meal_slots), batch_size):
-            batch = meal_slots[i:i+batch_size]
-            tasks = [find_restaurant_for_meal(m) for m in batch]
-            results = await asyncio.gather(*tasks)
-            all_restaurants.extend(results)
+
+        tasks = [find_restaurant_for_meal(m) for m in meal_slots]
+        all_restaurants = await asyncio.gather(*tasks)
         
         # Apply restaurants to itinerary
         restaurant_map = {}
