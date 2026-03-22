@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
     Search, Calendar, Users, IndianRupee, Star, ExternalLink, Loader2, 
@@ -23,6 +23,32 @@ const HotelBooking = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const [selectedHotel, setSelectedHotel] = useState(null);
+
+    useEffect(() => {
+        try {
+            const savedState = localStorage.getItem('travelai_hotel_state');
+            if (!savedState) return;
+            const parsed = JSON.parse(savedState);
+            if (parsed?.searchParams) setSearchParams(parsed.searchParams);
+            if (parsed?.results) setResults(parsed.results);
+            if (parsed?.selectedHotel) setSelectedHotel(parsed.selectedHotel);
+        } catch (e) {
+            console.warn('Failed to restore hotel state:', e);
+        }
+    }, []);
+
+    useEffect(() => {
+        try {
+            const stateToPersist = {
+                searchParams,
+                results,
+                selectedHotel,
+            };
+            localStorage.setItem('travelai_hotel_state', JSON.stringify(stateToPersist));
+        } catch (e) {
+            console.warn('Failed to persist hotel state:', e);
+        }
+    }, [searchParams, results, selectedHotel]);
 
     const handleSearch = async (e) => {
         e.preventDefault();

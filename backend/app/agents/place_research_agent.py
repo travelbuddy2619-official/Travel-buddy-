@@ -4,6 +4,7 @@ Fetches real information about visit duration, opening hours, special events, pr
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Optional, Dict, Any, List
 import httpx
 
@@ -24,6 +25,15 @@ class PlaceResearchAgent:
             "X-API-KEY": serper_api_key,
             "Content-Type": "application/json"
         }
+        self._client: Optional[httpx.AsyncClient] = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=15,
+                limits=httpx.Limits(max_keepalive_connections=20, max_connections=40),
+            )
+        return self._client
     
     async def research_place(self, place_name: str, location: str, visit_date: str = None) -> Dict[str, Any]:
         """
@@ -46,8 +56,25 @@ class PlaceResearchAgent:
         }
         
         try:
+            # Run independent place lookups in parallel to reduce total latency.
+            place_info_task = asyncio.create_task(self._fetch_place_details(place_name, location))
+            duration_task = asyncio.create_task(self._search_visit_duration(place_name, location))
+            tips_task = asyncio.create_task(self._search_practical_tips(place_name, location))
+            best_time_task = asyncio.create_task(self._search_best_time(place_name, location))
+            events_task = (
+                asyncio.create_task(self._search_special_events(place_name, location, visit_date))
+                if visit_date
+                else None
+            )
+
+            place_info, duration_info, tips_info, best_time = await asyncio.gather(
+                place_info_task,
+                duration_task,
+                tips_task,
+                best_time_task,
+            )
+
             # 1. Get basic place info
-            place_info = await self._fetch_place_details(place_name, location)
             if place_info:
                 result["opening_hours"] = place_info.get("openingHours")
                 result["address"] = place_info.get("address")
@@ -55,23 +82,19 @@ class PlaceResearchAgent:
                 result["website"] = place_info.get("website")
             
             # 2. Get visit duration
-            duration_info = await self._search_visit_duration(place_name, location)
             result["visit_duration"] = duration_info
             
             # 3. Get practical tips and warnings
-            tips_info = await self._search_practical_tips(place_name, location)
             result["practical_tips"] = tips_info.get("tips", [])
             result["warnings"] = tips_info.get("warnings", [])
             result["ticket_info"] = tips_info.get("ticket_info")
             result["dress_code"] = tips_info.get("dress_code")
             
             # 4. Get special events (if date provided)
-            if visit_date:
-                events = await self._search_special_events(place_name, location, visit_date)
-                result["special_events"] = events
+            if events_task is not None:
+                result["special_events"] = await events_task
             
             # 5. Get best time to visit
-            best_time = await self._search_best_time(place_name, location)
             result["best_time_to_visit"] = best_time
             
             print(f"✓ [Place Research Agent] Completed research for '{place_name}'")
@@ -83,95 +106,95 @@ class PlaceResearchAgent:
     
     async def _fetch_place_details(self, place_name: str, location: str) -> Optional[Dict]:
         """Fetch basic place details from Google Places via Serper."""
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                resp = await client.post(
-                    SERPER_PLACES_URL,
-                    headers=self.headers,
-                    json={"q": f"{place_name} {location}", "num": 1}
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                places = data.get("places", [])
-                return places[0] if places else None
-            except:
-                return None
+        client = self._get_client()
+        try:
+            resp = await client.post(
+                SERPER_PLACES_URL,
+                headers=self.headers,
+                json={"q": f"{place_name} {location}", "num": 1}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            places = data.get("places", [])
+            return places[0] if places else None
+        except:
+            return None
     
     async def _search_visit_duration(self, place_name: str, location: str) -> Optional[str]:
         """Search for typical visit duration."""
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                queries = [
-                    f"{place_name} {location} how much time needed visit duration",
-                    f"{place_name} how long does darshan take waiting time"
-                ]
+        client = self._get_client()
+        try:
+            queries = [
+                f"{place_name} {location} how much time needed visit duration",
+                f"{place_name} how long does darshan take waiting time"
+            ]
+            
+            for query in queries:
+                resp = await client.post(
+                    SERPER_SEARCH_URL,
+                    headers=self.headers,
+                    json={"q": query, "num": 5}
+                )
+                resp.raise_for_status()
+                data = resp.json()
                 
-                for query in queries:
-                    resp = await client.post(
-                        SERPER_SEARCH_URL,
-                        headers=self.headers,
-                        json={"q": query, "num": 5}
-                    )
-                    resp.raise_for_status()
-                    data = resp.json()
-                    
-                    # Check answer box first
-                    if data.get("answerBox"):
-                        answer = data["answerBox"].get("snippet") or data["answerBox"].get("answer")
-                        if answer:
-                            return answer[:200]
-                    
-                    # Check organic results
-                    for result in data.get("organic", [])[:3]:
-                        snippet = result.get("snippet", "").lower()
-                        if any(word in snippet for word in ["hour", "minute", "time", "duration", "takes"]):
-                            return result.get("snippet", "")[:200]
+                # Check answer box first
+                if data.get("answerBox"):
+                    answer = data["answerBox"].get("snippet") or data["answerBox"].get("answer")
+                    if answer:
+                        return answer[:200]
                 
-                return None
-            except:
-                return None
+                # Check organic results
+                for result in data.get("organic", [])[:3]:
+                    snippet = result.get("snippet", "").lower()
+                    if any(word in snippet for word in ["hour", "minute", "time", "duration", "takes"]):
+                        return result.get("snippet", "")[:200]
+            
+            return None
+        except:
+            return None
     
     async def _search_practical_tips(self, place_name: str, location: str) -> Dict[str, Any]:
         """Search for practical tips, tickets, dress code, warnings."""
         result = {"tips": [], "warnings": [], "ticket_info": None, "dress_code": None}
         
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                resp = await client.post(
-                    SERPER_SEARCH_URL,
-                    headers=self.headers,
-                    json={"q": f"{place_name} {location} visitor tips ticket price entry fee dress code", "num": 8}
-                )
-                resp.raise_for_status()
-                data = resp.json()
+        client = self._get_client()
+        try:
+            resp = await client.post(
+                SERPER_SEARCH_URL,
+                headers=self.headers,
+                json={"q": f"{place_name} {location} visitor tips ticket price entry fee dress code", "num": 8}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            
+            for item in data.get("organic", [])[:5]:
+                snippet = item.get("snippet", "")
+                snippet_lower = snippet.lower()
                 
-                for item in data.get("organic", [])[:5]:
-                    snippet = item.get("snippet", "")
-                    snippet_lower = snippet.lower()
-                    
-                    # Ticket info
-                    if any(word in snippet_lower for word in ["ticket", "entry fee", "₹", "rs", "free entry", "inr"]):
-                        if not result["ticket_info"]:
-                            result["ticket_info"] = snippet[:150]
-                    
-                    # Dress code
-                    if any(word in snippet_lower for word in ["dress code", "wear", "clothing", "not allowed", "covered"]):
-                        if not result["dress_code"]:
-                            result["dress_code"] = snippet[:150]
-                    
-                    # Tips
-                    if any(word in snippet_lower for word in ["tip", "recommend", "best", "should", "must"]):
-                        result["tips"].append(snippet[:120])
-                    
-                    # Warnings
-                    if any(word in snippet_lower for word in ["warning", "caution", "avoid", "don't", "not allowed", "queue", "crowd"]):
-                        result["warnings"].append(snippet[:120])
+                # Ticket info
+                if any(word in snippet_lower for word in ["ticket", "entry fee", "₹", "rs", "free entry", "inr"]):
+                    if not result["ticket_info"]:
+                        result["ticket_info"] = snippet[:150]
                 
-                result["tips"] = result["tips"][:3]
-                result["warnings"] = result["warnings"][:2]
+                # Dress code
+                if any(word in snippet_lower for word in ["dress code", "wear", "clothing", "not allowed", "covered"]):
+                    if not result["dress_code"]:
+                        result["dress_code"] = snippet[:150]
                 
-            except:
-                pass
+                # Tips
+                if any(word in snippet_lower for word in ["tip", "recommend", "best", "should", "must"]):
+                    result["tips"].append(snippet[:120])
+                
+                # Warnings
+                if any(word in snippet_lower for word in ["warning", "caution", "avoid", "don't", "not allowed", "queue", "crowd"]):
+                    result["warnings"].append(snippet[:120])
+            
+            result["tips"] = result["tips"][:3]
+            result["warnings"] = result["warnings"][:2]
+            
+        except:
+            pass
         
         return result
     
@@ -179,53 +202,53 @@ class PlaceResearchAgent:
         """Search for special events on the visit date."""
         events = []
         
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                # Parse month from visit_date
-                from datetime import datetime
-                date_obj = datetime.strptime(visit_date, "%Y-%m-%d")
-                month_name = date_obj.strftime("%B")
-                
-                resp = await client.post(
-                    SERPER_SEARCH_URL,
-                    headers=self.headers,
-                    json={"q": f"{place_name} {location} festival event {month_name} {date_obj.year}", "num": 5}
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                
-                for item in data.get("organic", [])[:3]:
-                    snippet = item.get("snippet", "")
-                    if any(word in snippet.lower() for word in ["festival", "event", "celebration", "special", "ceremony"]):
-                        events.append(snippet[:150])
-                
-            except:
-                pass
+        client = self._get_client()
+        try:
+            # Parse month from visit_date
+            from datetime import datetime
+            date_obj = datetime.strptime(visit_date, "%Y-%m-%d")
+            month_name = date_obj.strftime("%B")
+            
+            resp = await client.post(
+                SERPER_SEARCH_URL,
+                headers=self.headers,
+                json={"q": f"{place_name} {location} festival event {month_name} {date_obj.year}", "num": 5}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            
+            for item in data.get("organic", [])[:3]:
+                snippet = item.get("snippet", "")
+                if any(word in snippet.lower() for word in ["festival", "event", "celebration", "special", "ceremony"]):
+                    events.append(snippet[:150])
+            
+        except:
+            pass
         
         return events[:2]
     
     async def _search_best_time(self, place_name: str, location: str) -> Optional[str]:
         """Search for best time to visit."""
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                resp = await client.post(
-                    SERPER_SEARCH_URL,
-                    headers=self.headers,
-                    json={"q": f"{place_name} {location} best time to visit morning evening", "num": 3}
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                
-                if data.get("answerBox"):
-                    return data["answerBox"].get("snippet", "")[:150]
-                
-                for item in data.get("organic", [])[:2]:
-                    snippet = item.get("snippet", "")
-                    if any(word in snippet.lower() for word in ["best time", "morning", "evening", "early", "avoid"]):
-                        return snippet[:150]
-                
-            except:
-                pass
+        client = self._get_client()
+        try:
+            resp = await client.post(
+                SERPER_SEARCH_URL,
+                headers=self.headers,
+                json={"q": f"{place_name} {location} best time to visit morning evening", "num": 3}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            
+            if data.get("answerBox"):
+                return data["answerBox"].get("snippet", "")[:150]
+            
+            for item in data.get("organic", [])[:2]:
+                snippet = item.get("snippet", "")
+                if any(word in snippet.lower() for word in ["best time", "morning", "evening", "early", "avoid"]):
+                    return snippet[:150]
+            
+        except:
+            pass
         
         return None
     
@@ -243,29 +266,29 @@ class PlaceResearchAgent:
         
         try:
             # Search for crowd patterns
-            async with httpx.AsyncClient(timeout=15) as client:
-                query = f"{place_name} {location} busy hours peak time crowd when to visit"
-                
-                resp = await client.post(
-                    SERPER_SEARCH_URL,
-                    headers=self.headers,
-                    json={"q": query, "num": 8}
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                
-                # Collect information from search results
-                all_snippets = []
-                
-                if data.get("answerBox"):
-                    all_snippets.append(data["answerBox"].get("snippet", ""))
-                
-                for item in data.get("organic", [])[:6]:
-                    snippet = item.get("snippet", "")
-                    if snippet:
-                        all_snippets.append(snippet)
+            client = self._get_client()
+            query = f"{place_name} {location} busy hours peak time crowd when to visit"
             
-            # Use LLM to extract crowd patterns from search results
+            resp = await client.post(
+                SERPER_SEARCH_URL,
+                headers=self.headers,
+                json={"q": query, "num": 8}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            
+            # Collect information from search results
+            all_snippets = []
+            
+            if data.get("answerBox"):
+                all_snippets.append(data["answerBox"].get("snippet", ""))
+            
+            for item in data.get("organic", [])[:6]:
+                snippet = item.get("snippet", "")
+                if snippet:
+                    all_snippets.append(snippet)
+            
+            # Use LLM to extract crowd patterns
             from groq import Groq
             llm = Groq(api_key=self.__dict__.get('groq_api_key', ''))
             

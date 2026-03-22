@@ -4,6 +4,7 @@ Uses Google Map Places API (Gimap) as primary + Serper as fallback
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Optional, Dict, Any, List
 import httpx
 
@@ -35,6 +36,25 @@ class PhotoReviewAgent:
             "x-rapidapi-host": "google-map-places.p.rapidapi.com",
             "x-rapidapi-key": rapidapi_key or ""
         }
+        self._client: Optional[httpx.AsyncClient] = None
+        self._photo_client: Optional[httpx.AsyncClient] = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=15,
+                limits=httpx.Limits(max_keepalive_connections=20, max_connections=40),
+            )
+        return self._client
+
+    def _get_photo_client(self) -> httpx.AsyncClient:
+        if self._photo_client is None:
+            self._photo_client = httpx.AsyncClient(
+                timeout=10,
+                follow_redirects=True,
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            )
+        return self._photo_client
     
     async def research_place(self, place_name: str, location: str) -> Dict[str, Any]:
         """
@@ -57,8 +77,14 @@ class PhotoReviewAgent:
         }
         
         try:
+            # Fetch Serper place, images, and review summary in parallel.
+            place_task = asyncio.create_task(self._fetch_place_data_serper(place_name, location))
+            images_task = asyncio.create_task(self._fetch_images_serper(place_name, location))
+            reviews_task = asyncio.create_task(self._fetch_reviews(place_name, location))
+
+            place_data, images, reviews = await asyncio.gather(place_task, images_task, reviews_task)
+
             # 1. Try Serper first for place data (primary)
-            place_data = await self._fetch_place_data_serper(place_name, location)
             if place_data:
                 result["rating"] = place_data.get("rating")
                 result["total_reviews"] = place_data.get("ratingCount")
@@ -70,27 +96,26 @@ class PhotoReviewAgent:
                     result["google_maps_url"] = f"https://www.google.com/maps/search/?api=1&query={result['latitude']},{result['longitude']}"
             
             # 2. Fetch images from Serper (primary)
-            images = await self._fetch_images_serper(place_name, location)
             result["images"] = images
             
-            # 3. Fallback to Gimap if Serper didn't return data
-            if not result["rating"] and self.rapidapi_key:
+            # 3/4. Single Gimap fallback call for missing structured fields and images.
+            gimap_data = None
+            if self.rapidapi_key and (not result["rating"] or not result["images"]):
                 gimap_data = await self._fetch_place_data_gimap(place_name, location)
-                if gimap_data:
-                    result["rating"] = gimap_data.get("rating")
-                    result["total_reviews"] = gimap_data.get("user_ratings_total")
-                    result["address"] = gimap_data.get("formatted_address", gimap_data.get("vicinity"))
-                    
-                    geo = gimap_data.get("geometry", {}).get("location", {})
-                    result["latitude"] = geo.get("lat")
-                    result["longitude"] = geo.get("lng")
-                    
-                    if result["latitude"] and result["longitude"]:
-                        result["google_maps_url"] = f"https://www.google.com/maps/search/?api=1&query={result['latitude']},{result['longitude']}"
-            
-            # 4. Fallback to Gimap for images if none from Serper
-            if not result["images"] and self.rapidapi_key:
-                gimap_data = await self._fetch_place_data_gimap(place_name, location)
+
+            if gimap_data and not result["rating"]:
+                result["rating"] = gimap_data.get("rating")
+                result["total_reviews"] = gimap_data.get("user_ratings_total")
+                result["address"] = gimap_data.get("formatted_address", gimap_data.get("vicinity"))
+
+                geo = gimap_data.get("geometry", {}).get("location", {})
+                result["latitude"] = geo.get("lat")
+                result["longitude"] = geo.get("lng")
+
+                if result["latitude"] and result["longitude"]:
+                    result["google_maps_url"] = f"https://www.google.com/maps/search/?api=1&query={result['latitude']},{result['longitude']}"
+
+            if gimap_data and not result["images"]:
                 if gimap_data:
                     photos = gimap_data.get("photos", [])
                     for photo in photos[:5]:
@@ -101,8 +126,7 @@ class PhotoReviewAgent:
                                 result["images"].append(photo_url)
                     print(f"✓ [Photo Review Agent] Gimap fallback: {len(result['images'])} images")
             
-            # 5. Fetch review snippets and summary
-            reviews = await self._fetch_reviews(place_name, location)
+            # 5. Review snippets and summary (already fetched above)
             result["review_snippets"] = reviews.get("snippets", [])
             result["review_summary"] = reviews.get("summary")
             
@@ -115,88 +139,88 @@ class PhotoReviewAgent:
     
     async def _fetch_place_data_gimap(self, place_name: str, location: str) -> Optional[Dict]:
         """Fetch place details from Gimap Google Map Places API."""
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                resp = await client.get(
-                    GOOGLE_PLACES_TEXT_URL,
-                    headers=self.rapidapi_headers,
-                    params={
-                        "query": f"{place_name} {location}",
-                        "language": "en"
-                    }
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    results = data.get("results", [])
-                    return results[0] if results else None
-            except Exception as e:
-                print(f"⚠️ [Photo Review Agent] Gimap error: {e}")
+        client = self._get_client()
+        try:
+            resp = await client.get(
+                GOOGLE_PLACES_TEXT_URL,
+                headers=self.rapidapi_headers,
+                params={
+                    "query": f"{place_name} {location}",
+                    "language": "en"
+                }
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                results = data.get("results", [])
+                return results[0] if results else None
+        except Exception as e:
+            print(f"⚠️ [Photo Review Agent] Gimap error: {e}")
         return None
     
     async def _fetch_photo_url(self, photo_reference: str, max_width: int = 400) -> Optional[str]:
         """Fetch actual photo URL from Gimap API by following redirects."""
         try:
-            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-                response = await client.get(
-                    GOOGLE_PLACES_PHOTO_URL,
-                    headers=self.rapidapi_headers,
-                    params={
-                        "photo_reference": photo_reference,
-                        "maxwidth": str(max_width)
-                    }
-                )
-                
-                if response.status_code == 200:
-                    final_url = str(response.url)
-                    if "googleusercontent.com" in final_url or "ggpht.com" in final_url:
-                        return final_url
-                    content_type = response.headers.get("content-type", "")
-                    if "image" in content_type:
-                        return final_url
+            client = self._get_photo_client()
+            response = await client.get(
+                GOOGLE_PLACES_PHOTO_URL,
+                headers=self.rapidapi_headers,
+                params={
+                    "photo_reference": photo_reference,
+                    "maxwidth": str(max_width)
+                }
+            )
+            
+            if response.status_code == 200:
+                final_url = str(response.url)
+                if "googleusercontent.com" in final_url or "ggpht.com" in final_url:
+                    return final_url
+                content_type = response.headers.get("content-type", "")
+                if "image" in content_type:
+                    return final_url
         except Exception as e:
             pass
         return None
     
     async def _fetch_place_data_serper(self, place_name: str, location: str) -> Optional[Dict]:
         """Fetch place details from Google Places via Serper."""
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                resp = await client.post(
-                    SERPER_PLACES_URL,
-                    headers=self.headers,
-                    json={"q": f"{place_name} {location}", "num": 1}
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                places = data.get("places", [])
-                return places[0] if places else None
-            except:
-                return None
+        client = self._get_client()
+        try:
+            resp = await client.post(
+                SERPER_PLACES_URL,
+                headers=self.headers,
+                json={"q": f"{place_name} {location}", "num": 1}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            places = data.get("places", [])
+            return places[0] if places else None
+        except:
+            return None
     
     async def _fetch_images_serper(self, place_name: str, location: str, num_images: int = 5) -> List[str]:
         """Fetch real images from Google Images via Serper (fallback)."""
         images = []
         
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                resp = await client.post(
-                    SERPER_IMAGES_URL,
-                    headers=self.headers,
-                    json={"q": f"{place_name} {location} tourism", "num": num_images + 5}
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                
-                for img in data.get("images", []):
-                    url = img.get("imageUrl", "")
-                    # Filter out low-quality images
-                    if url and not any(bad in url.lower() for bad in ["favicon", "logo", "icon", "placeholder"]):
-                        images.append(url)
-                        if len(images) >= num_images:
-                            break
-                
-            except:
-                pass
+        client = self._get_client()
+        try:
+            resp = await client.post(
+                SERPER_IMAGES_URL,
+                headers=self.headers,
+                json={"q": f"{place_name} {location} tourism", "num": num_images + 5}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            
+            for img in data.get("images", []):
+                url = img.get("imageUrl", "")
+                # Filter out low-quality images
+                if url and not any(bad in url.lower() for bad in ["favicon", "logo", "icon", "placeholder"]):
+                    images.append(url)
+                    if len(images) >= num_images:
+                        break
+            
+        except:
+            pass
         
         return images
     
@@ -204,36 +228,36 @@ class PhotoReviewAgent:
         """Fetch review snippets and generate a summary."""
         result = {"snippets": [], "summary": None}
         
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                # Search for reviews
-                resp = await client.post(
-                    SERPER_SEARCH_URL,
-                    headers=self.headers,
-                    json={"q": f"{place_name} {location} reviews visitors experience", "num": 8}
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                
-                review_texts = []
-                
-                for item in data.get("organic", [])[:5]:
-                    snippet = item.get("snippet", "")
-                    if any(word in snippet.lower() for word in ["visit", "experience", "amazing", "beautiful", "recommend", "must", "wonderful", "review"]):
-                        review_texts.append(snippet)
-                        result["snippets"].append({
-                            "text": snippet[:200],
-                            "source": item.get("title", "")[:50]
-                        })
-                
-                # Generate summary from collected reviews
-                if review_texts:
-                    combined = " ".join(review_texts[:3])
-                    # Create a brief summary
-                    result["summary"] = self._generate_review_summary(combined)
-                
-            except:
-                pass
+        client = self._get_client()
+        try:
+            # Search for reviews
+            resp = await client.post(
+                SERPER_SEARCH_URL,
+                headers=self.headers,
+                json={"q": f"{place_name} {location} reviews visitors experience", "num": 8}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            
+            review_texts = []
+            
+            for item in data.get("organic", [])[:5]:
+                snippet = item.get("snippet", "")
+                if any(word in snippet.lower() for word in ["visit", "experience", "amazing", "beautiful", "recommend", "must", "wonderful", "review"]):
+                    review_texts.append(snippet)
+                    result["snippets"].append({
+                        "text": snippet[:200],
+                        "source": item.get("title", "")[:50]
+                    })
+            
+            # Generate summary from collected reviews
+            if review_texts:
+                combined = " ".join(review_texts[:3])
+                # Create a brief summary
+                result["summary"] = self._generate_review_summary(combined)
+            
+        except:
+            pass
         
         return result
     

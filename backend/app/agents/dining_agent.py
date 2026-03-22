@@ -5,6 +5,7 @@ Uses Serper (primary) + Google Map Places API (Gimap fallback) + curated data
 """
 from __future__ import annotations
 
+import os
 from typing import Optional, Dict, Any, List
 import httpx
 import random
@@ -129,6 +130,9 @@ class DiningAgent:
             "x-rapidapi-host": "google-map-places.p.rapidapi.com",
             "x-rapidapi-key": rapidapi_key or ""
         }
+        self._client: Optional[httpx.AsyncClient] = None
+        self._meal_cache: Dict[str, Dict[str, Any]] = {}
+        self.require_real_data = os.getenv("REQUIRE_REAL_DATA", "true").lower() == "true"
         
         # City coordinates for Google Places API
         self.city_coords = {
@@ -153,6 +157,14 @@ class DiningAgent:
             "rishikesh": {"lat": 30.0869, "lng": 78.2676},
             "amritsar": {"lat": 31.6340, "lng": 74.8723},
         }
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=15,
+                limits=httpx.Limits(max_keepalive_connections=20, max_connections=40),
+            )
+        return self._client
     
     async def find_restaurants(
         self, 
@@ -212,6 +224,10 @@ class DiningAgent:
                 print(f"⚠️ [Dining Agent] Google Places error: {e}")
         
         # Try 3: Curated fallback
+        if self.require_real_data:
+            print(f"✗ [Dining Agent] Real-data mode: no fallback for {location}")
+            return []
+
         print(f"📋 [Dining Agent] Using curated recommendations for {location}")
         return self._get_fallback_restaurants(location, meal_type, num_results)
     
@@ -432,6 +448,13 @@ class DiningAgent:
         Uses: Google Places API → Serper → Curated Fallback
         """
         print(f"🍽️ [Dining Agent] Finding {meal_type} spot in {location}...")
+
+        cache_key = f"{location.strip().lower()}::{meal_type.strip().lower()}::{(cuisine_preference or '').strip().lower()}"
+        if cache_key in self._meal_cache:
+            cached = dict(self._meal_cache[cache_key])
+            cached["data_source"] = f"{cached.get('data_source', 'cache')} (cached)"
+            print(f"⚡ [Dining Agent] Cache hit for {meal_type} in {location}")
+            return cached
         
         # Build search query
         if meal_type == "breakfast":
@@ -459,6 +482,7 @@ class DiningAgent:
                 result = await self._enrich_restaurant(places[0], location)
                 if result:
                     result["data_source"] = "Serper"
+                    self._meal_cache[cache_key] = dict(result)
                     print(f"✅ [Dining Agent] Found via Serper: {result['name']}")
                     return result
         except Exception as e:
@@ -471,14 +495,22 @@ class DiningAgent:
                 if places:
                     result = await self._parse_google_place_async(places[0], location)
                     if result:
+                        self._meal_cache[cache_key] = dict(result)
                         print(f"✅ [Dining Agent] Found via Google Places: {result['name']}")
                         return result
             except Exception as e:
                 print(f"⚠️ [Dining Agent] Google Places error: {e}")
         
         # Try 3: Curated fallback
+        if self.require_real_data:
+            print(f"✗ [Dining Agent] Real-data mode: no fallback for {meal_type} in {location}")
+            return None
+
         print(f"📋 [Dining Agent] Using curated recommendation for {location}")
-        return self._get_fallback_restaurant(location, meal_type)
+        fallback = self._get_fallback_restaurant(location, meal_type)
+        if fallback:
+            self._meal_cache[cache_key] = dict(fallback)
+        return fallback
     
     def _get_fallback_restaurant(self, location: str, meal_type: str) -> Optional[Dict[str, Any]]:
         """Get a curated restaurant recommendation when API fails."""
@@ -531,18 +563,18 @@ class DiningAgent:
     
     async def _search_places(self, query: str, num: int) -> List[Dict]:
         """Search for restaurants using Serper Places API."""
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                resp = await client.post(
-                    SERPER_PLACES_URL,
-                    headers=self.headers,
-                    json={"q": query, "num": num}
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                return data.get("places", [])
-            except:
-                return []
+        client = self._get_client()
+        try:
+            resp = await client.post(
+                SERPER_PLACES_URL,
+                headers=self.headers,
+                json={"q": query, "num": num}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("places", [])
+        except:
+            return []
     
     async def _enrich_restaurant(self, place: Dict, location: str) -> Optional[Dict[str, Any]]:
         """Enrich restaurant data with additional details."""
@@ -599,59 +631,57 @@ class DiningAgent:
     async def _fetch_images(self, name: str, location: str) -> List[str]:
         """Fetch restaurant images."""
         images = []
-        
-        async with httpx.AsyncClient(timeout=10) as client:
-            try:
-                resp = await client.post(
-                    SERPER_IMAGES_URL,
-                    headers=self.headers,
-                    json={"q": f"{name} {location} restaurant food", "num": 5}
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                
-                for img in data.get("images", [])[:3]:
-                    url = img.get("imageUrl", "")
-                    if url and "logo" not in url.lower():
-                        images.append(url)
-                        
-            except:
-                pass
+
+        client = self._get_client()
+        try:
+            resp = await client.post(
+                SERPER_IMAGES_URL,
+                headers=self.headers,
+                json={"q": f"{name} {location} restaurant food", "num": 5}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            for img in data.get("images", [])[:3]:
+                url = img.get("imageUrl", "")
+                if url and "logo" not in url.lower():
+                    images.append(url)
+        except:
+            pass
         
         return images
     
     async def _fetch_restaurant_details(self, name: str, location: str) -> Dict[str, Any]:
         """Fetch must-try dishes and reviews."""
         result = {"must_try": [], "review_snippet": None}
-        
-        async with httpx.AsyncClient(timeout=10) as client:
-            try:
-                resp = await client.post(
-                    SERPER_SEARCH_URL,
-                    headers=self.headers,
-                    json={"q": f"{name} {location} must try dishes famous food menu review", "num": 5}
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                
-                for item in data.get("organic", [])[:3]:
-                    snippet = item.get("snippet", "")
-                    snippet_lower = snippet.lower()
-                    
-                    # Extract must-try dishes
-                    if any(word in snippet_lower for word in ["must try", "famous for", "known for", "signature", "specialty", "best"]):
-                        # Try to extract dish names
-                        result["must_try"].append(snippet[:100])
-                    
-                    # Get review snippet
-                    if not result["review_snippet"]:
-                        if any(word in snippet_lower for word in ["delicious", "amazing", "taste", "food", "service"]):
-                            result["review_snippet"] = snippet[:150]
-                
-                # Clean up must_try - keep only 2-3 items
-                result["must_try"] = result["must_try"][:2]
-                
-            except:
-                pass
+
+        client = self._get_client()
+        try:
+            resp = await client.post(
+                SERPER_SEARCH_URL,
+                headers=self.headers,
+                json={"q": f"{name} {location} must try dishes famous food menu review", "num": 5}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            for item in data.get("organic", [])[:3]:
+                snippet = item.get("snippet", "")
+                snippet_lower = snippet.lower()
+
+                # Extract must-try dishes
+                if any(word in snippet_lower for word in ["must try", "famous for", "known for", "signature", "specialty", "best"]):
+                    # Try to extract dish names
+                    result["must_try"].append(snippet[:100])
+
+                # Get review snippet
+                if not result["review_snippet"]:
+                    if any(word in snippet_lower for word in ["delicious", "amazing", "taste", "food", "service"]):
+                        result["review_snippet"] = snippet[:150]
+
+            # Clean up must_try - keep only 2-3 items
+            result["must_try"] = result["must_try"][:2]
+        except:
+            pass
         
         return result
