@@ -1,9 +1,135 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --travel-ink: #0b1f33;
+  --travel-muted: #475569;
+  --travel-sky: #0b84d8;
+  --travel-sea: #0aa6b6;
+  --travel-sand: #ff9f43;
+  --travel-mint: #12b886;
+  --travel-surface: rgba(255, 255, 255, 0.9);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
 body {
-  background-color: #f8f9fa; /* Light grey background */
+  margin: 0;
+  color: var(--travel-ink);
+  font-family: 'Manrope', sans-serif;
+  background:
+    radial-gradient(circle at 5% 10%, rgba(11, 132, 216, 0.16), transparent 35%),
+    radial-gradient(circle at 95% 20%, rgba(255, 159, 67, 0.12), transparent 32%),
+    linear-gradient(180deg, #eef7ff 0%, #f8fbff 35%, #f6fafc 100%);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: 'Sora', sans-serif;
+}
+
+.travel-page-shell {
+  position: relative;
+  overflow-x: clip;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 12% 12%, rgba(11, 132, 216, 0.1), transparent 28%),
+    radial-gradient(circle at 88% 0%, rgba(18, 184, 134, 0.08), transparent 30%),
+    linear-gradient(180deg, #f6fbff 0%, #f8fbff 40%, #f2f7fb 100%);
+}
+
+.travel-page-shell::before,
+.travel-page-shell::after {
+  content: '';
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(46px);
+  opacity: 0.55;
+  pointer-events: none;
+  z-index: 0;
+  animation: travelFloat 18s ease-in-out infinite;
+}
+
+.travel-page-shell::before {
+  width: 22rem;
+  height: 22rem;
+  background: radial-gradient(circle, rgba(14, 165, 233, 0.32), transparent 70%);
+  top: -7rem;
+  left: -7rem;
+}
+
+.travel-page-shell::after {
+  width: 20rem;
+  height: 20rem;
+  background: radial-gradient(circle, rgba(245, 158, 11, 0.22), transparent 70%);
+  bottom: 10%;
+  right: -6rem;
+  animation-delay: -8s;
+}
+
+.travel-page-shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+.travel-glass {
+  background: var(--travel-surface);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(8px);
+}
+
+.travel-cta {
+  background: linear-gradient(135deg, var(--travel-sky), #2068d9);
+  color: #fff;
+  border: 0;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.28);
+}
+
+.travel-cta:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 30px rgba(37, 99, 235, 0.34);
+}
+
+.travel-section-title {
+  letter-spacing: -0.02em;
+}
+
+.travel-gradient-text {
+  background: linear-gradient(120deg, #0b84d8 0%, #0aa6b6 45%, #ff9f43 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.travel-card-hover {
+  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+
+.travel-card-hover:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.12);
+  border-color: rgba(14, 165, 233, 0.35);
+}
+
+@keyframes travelFloat {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, -16px, 0) scale(1.05);
+  }
 }

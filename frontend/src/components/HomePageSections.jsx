@@ -40,7 +40,7 @@ export const HowItWorks = () => {
   ];
 
   return (
-    <section className="py-20 bg-white">
+    <section className="py-20 bg-gradient-to-b from-sky-50/70 to-white">
       <div className="container mx-auto px-4">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
@@ -50,7 +50,7 @@ export const HowItWorks = () => {
         >
           <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">How It Works</span>
           <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mt-3 mb-4">
-            Plan Your Trip in <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">4 Easy Steps</span>
+            Plan Your Trip in <span className="travel-gradient-text">4 Easy Steps</span>
           </h2>
           <p className="text-gray-600 text-lg max-w-2xl mx-auto">
             Our AI-powered platform makes travel planning effortless and enjoyable
@@ -72,7 +72,7 @@ export const HowItWorks = () => {
                 <div className="hidden lg:block absolute top-16 left-[60%] w-full h-0.5 bg-gradient-to-r from-gray-200 to-transparent" />
               )}
               
-              <div className="bg-gray-50 rounded-2xl p-8 hover:bg-white hover:shadow-xl transition-all duration-300 border border-gray-100 relative z-10">
+              <div className="travel-glass travel-card-hover rounded-2xl p-8 border border-gray-100 relative z-10">
                 <div className={`w-16 h-16 rounded-2xl bg-gradient-to-br ${step.color} flex items-center justify-center text-white mb-6 group-hover:scale-110 transition-transform`}>
                   {step.icon}
                 </div>
@@ -130,7 +130,7 @@ export const Features = () => {
   ];
 
   return (
-    <section className="py-20 bg-gradient-to-b from-gray-50 to-white">
+    <section className="py-20 bg-gradient-to-b from-emerald-50/50 to-white">
       <div className="container mx-auto px-4">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
@@ -140,7 +140,7 @@ export const Features = () => {
         >
           <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">Features</span>
           <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mt-3 mb-4">
-            Everything You Need to <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">Travel Smart</span>
+            Everything You Need to <span className="travel-gradient-text">Travel Smart</span>
           </h2>
           <p className="text-gray-600 text-lg max-w-2xl mx-auto">
             Powered by cutting-edge AI technology to make your travel planning seamless
@@ -155,7 +155,7 @@ export const Features = () => {
               whileInView={{ opacity: 1, scale: 1 }}
               viewport={{ once: true }}
               transition={{ delay: index * 0.05 }}
-              className="bg-white rounded-2xl p-6 border border-gray-100 hover:shadow-lg hover:border-blue-200 transition-all group cursor-pointer"
+              className="travel-glass travel-card-hover rounded-2xl p-6 border border-gray-100 group cursor-pointer"
             >
               <div className={`w-12 h-12 rounded-xl ${feature.color} flex items-center justify-center mb-4 group-hover:scale-110 transition-transform`}>
                 {feature.icon}
@@ -218,7 +218,7 @@ export const PopularDestinations = () => {
   ];
 
   return (
-    <section className="py-20 bg-white">
+    <section className="py-20 bg-gradient-to-b from-white to-cyan-50/40">
       <div className="container mx-auto px-4">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
@@ -229,7 +229,7 @@ export const PopularDestinations = () => {
           <div>
             <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">Popular Destinations</span>
             <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mt-3">
-              Trending <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">Destinations</span>
+              Trending <span className="travel-gradient-text">Destinations</span>
             </h2>
           </div>
           <Link to="/" className="hidden md:flex items-center gap-2 text-blue-600 font-semibold hover:gap-3 transition-all">
@@ -290,7 +290,7 @@ export const Stats = () => {
   ];
 
   return (
-    <section className="py-16 bg-gradient-to-r from-blue-600 to-purple-600">
+    <section className="py-16 bg-gradient-to-r from-sky-700 via-cyan-600 to-emerald-600">
       <div className="container mx-auto px-4">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
           {stats.map((stat, index) => (
@@ -342,7 +342,7 @@ export const Testimonials = () => {
   ];
 
   return (
-    <section className="py-20 bg-gray-50">
+    <section className="py-20 bg-gradient-to-b from-slate-50 to-white">
       <div className="container mx-auto px-4">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
@@ -352,7 +352,7 @@ export const Testimonials = () => {
         >
           <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">Testimonials</span>
           <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mt-3 mb-4">
-            What Our <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">Travelers Say</span>
+            What Our <span className="travel-gradient-text">Travelers Say</span>
           </h2>
         </motion.div>
 
@@ -364,7 +364,7 @@ export const Testimonials = () => {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ delay: index * 0.1 }}
-              className="bg-white rounded-2xl p-8 shadow-lg border border-gray-100"
+              className="travel-glass travel-card-hover rounded-2xl p-8 border border-gray-100"
             >
               <div className="flex items-center gap-1 mb-4">
                 {[...Array(testimonial.rating)].map((_, i) => (
@@ -394,7 +394,7 @@ export const Testimonials = () => {
 // CTA Section
 export const CTASection = () => {
   return (
-    <section className="py-20 bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600 relative overflow-hidden">
+    <section className="py-20 bg-gradient-to-br from-sky-700 via-cyan-600 to-emerald-600 relative overflow-hidden">
       {/* Background Pattern */}
       <div className="absolute inset-0 opacity-10">
         <div className="absolute top-10 left-10 w-40 h-40 bg-white rounded-full blur-3xl" />
@@ -417,7 +417,7 @@ export const CTASection = () => {
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <a 
               href="#home" 
-              className="bg-white text-blue-600 px-8 py-4 rounded-full font-bold hover:shadow-xl hover:scale-105 transition-all inline-flex items-center justify-center gap-2"
+              className="bg-white text-sky-700 px-8 py-4 rounded-full font-bold hover:shadow-xl hover:scale-105 transition-all inline-flex items-center justify-center gap-2"
             >
               Start Planning <ChevronRight className="w-5 h-5" />
             </a>

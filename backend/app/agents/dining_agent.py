@@ -5,7 +5,6 @@ Uses Serper (primary) + Google Map Places API (Gimap fallback) + curated data
 """
 from __future__ import annotations
 
-import os
 from typing import Optional, Dict, Any, List
 import httpx
 import random
@@ -132,7 +131,7 @@ class DiningAgent:
         }
         self._client: Optional[httpx.AsyncClient] = None
         self._meal_cache: Dict[str, Dict[str, Any]] = {}
-        self.require_real_data = os.getenv("REQUIRE_REAL_DATA", "true").lower() == "true"
+        self.require_real_data = True
         
         # City coordinates for Google Places API
         self.city_coords = {

@@ -240,6 +240,8 @@ class ItineraryResponse(BaseModel):
     
     # Smart Trip Insights
     tripInsights: Optional[dict] = Field(default=None, alias="tripInsights")
+    transportationPlan: Optional[dict] = Field(default=None, alias="transportationPlan")
+    suggestedTransport: List[dict] = Field(default_factory=list, alias="suggestedTransport")
     
     # General trip info
     packingList: List[str] = Field(default_factory=list, alias="packingList")

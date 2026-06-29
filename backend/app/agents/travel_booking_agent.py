@@ -69,7 +69,7 @@ class TravelBookingAgent:
         results = {
             "origin": origin, "destination": destination, "travel_date": travel_date,
             "passengers": passengers, "budget": budget,
-            "flights": [], "trains": [], "buses": [],
+            "flights": [], "trains": [], "buses": [], "cars": [],
             "search_summary": "", "data_source": "multi-api", "apis_used": []
         }
         
@@ -85,6 +85,9 @@ class TravelBookingAgent:
         
         if travel_type in ["bus", "all"]:
             results["buses"] = await self._search_buses(origin, destination, travel_date, budget, passengers)
+
+        if travel_type in ["car", "all"]:
+            results["cars"] = await self._search_cars(origin, destination, travel_date, budget, passengers)
         
         results["search_summary"] = self._generate_summary(results, budget)
         return results
@@ -633,9 +636,35 @@ class TravelBookingAgent:
         """Generate search summary."""
         apis = results.get("apis_used", [])
         flights = results.get("flights", [])
+        trains = results.get("trains", [])
+        buses = results.get("buses", [])
+        cars = results.get("cars", [])
         
+        if not any([flights, trains, buses, cars]):
+            return "No travel options found for this route."
+
         if not flights:
-            return "No flights found for this route."
+            mode_options = [
+                ("Train", trains),
+                ("Bus", buses),
+                ("Car", cars),
+            ]
+            for mode, options in mode_options:
+                if options:
+                    cheapest = min(options, key=lambda x: x.get("price_per_person", 999999))
+                    fastest = min(options, key=lambda x: x.get("duration_minutes", 999999))
+                    live_badge = "LIVE" if cheapest.get("is_real_data") else "Est"
+                    name = (
+                        cheapest.get("train_name")
+                        or cheapest.get("operator")
+                        or cheapest.get("vehicle_type")
+                        or cheapest.get("name")
+                        or mode
+                    )
+                    summary = f"{mode} {live_badge}: Rs {cheapest.get('price_per_person', 0):,} ({name})"
+                    if fastest != cheapest:
+                        summary += f" | Fastest: {fastest.get('duration', 'varies')}"
+                    return summary
         
         cheapest = min(flights, key=lambda x: x["price_per_person"])
         fastest = min(flights, key=lambda x: x.get("duration_minutes", 999))
@@ -1141,6 +1170,85 @@ class TravelBookingAgent:
             print(f"   ⚠️ Bus AI error: {e}")
             return []
     
+    # ==================== CARS - ESTIMATED ROAD TRIP OPTIONS ====================
+
+    async def _search_cars(self, origin: str, destination: str, travel_date: str,
+                            budget: Optional[int], passengers: int) -> List[Dict]:
+        """Estimate car/self-drive options for routes without a live road API."""
+        print(f"\nCar Search: {origin} -> {destination}")
+        cars = await self._get_ai_cars(origin, destination, travel_date, budget, passengers)
+        if cars:
+            self._add_car_badges(cars)
+        return cars[:3]
+
+    async def _get_ai_cars(self, origin: str, destination: str, travel_date: str,
+                            budget: Optional[int], passengers: int) -> List[Dict]:
+        """Generate realistic car options using LLM estimates."""
+        prompt = f"""Generate 3 realistic car travel options from {origin} to {destination} for {travel_date}.
+Return only a JSON array. Include:
+- vehicle_type (Hatchback/Sedan/SUV/Self-drive)
+- departure_time
+- arrival_time
+- duration
+- distance_km
+- fuel_or_cab_cost
+- tolls
+- notes
+Use realistic Indian road speeds and route assumptions. Costs must be INR total for the vehicle."""
+
+        try:
+            response = await self.groq_client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+            )
+            content = response.choices[0].message.content
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0]
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0]
+
+            cars_data = json.loads(content)
+            cars = []
+            for car in cars_data[:3]:
+                total_price = int(car.get("fuel_or_cab_cost", 0) or 0) + int(car.get("tolls", 0) or 0)
+                if total_price <= 0:
+                    total_price = 3500
+                cars.append({
+                    "name": f"{car.get('vehicle_type', 'Car')} road trip",
+                    "vehicle_type": car.get("vehicle_type", "Car"),
+                    "departure_time": car.get("departure_time", "06:00"),
+                    "arrival_time": car.get("arrival_time", "14:00"),
+                    "duration": car.get("duration", "8h 0m"),
+                    "duration_minutes": self._parse_train_duration(car.get("duration", "8:0")),
+                    "distance_km": car.get("distance_km"),
+                    "price_per_person": max(int(total_price / max(passengers, 1)), 1),
+                    "total_price": total_price,
+                    "passengers": passengers,
+                    "tolls": car.get("tolls", 0),
+                    "notes": car.get("notes", "Estimated road journey"),
+                    "is_real_data": False,
+                    "data_source": "AI Estimate (road distance/duration)",
+                    "booking_url": "https://www.google.com/maps",
+                })
+            return cars
+        except Exception as e:
+            print(f"   Car AI error: {e}")
+            return []
+
+    def _add_car_badges(self, cars: List[Dict]) -> None:
+        """Add badges to car options."""
+        if not cars:
+            return
+        by_price = sorted(cars, key=lambda x: x.get("price_per_person", 999999))
+        by_duration = sorted(cars, key=lambda x: x.get("duration_minutes", 999999))
+        if by_price:
+            by_price[0]["badge"] = "Cheapest"
+        if by_duration and by_duration[0] != by_price[0]:
+            by_duration[0]["badge"] = "Fastest"
+        for car in cars:
+            car.setdefault("badge", "Road Trip")
+
     def _add_bus_badges(self, buses: List[Dict]) -> None:
         """Add badges to buses."""
         if not buses:

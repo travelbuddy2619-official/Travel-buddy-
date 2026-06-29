@@ -373,9 +373,9 @@ const HotelBooking = () => {
     );
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-slate-50 to-purple-50">
+        <div className="travel-page-shell">
             {/* Header with Service Tabs - MakeMyTrip Style */}
-            <header className="bg-gradient-to-r from-[#041E42] to-[#0D47A1] sticky top-0 z-50">
+            <header className="bg-gradient-to-r from-sky-950 via-blue-900 to-cyan-800 sticky top-0 z-50 shadow-lg shadow-slate-900/20">
                 {/* Top Bar */}
                 <div className="container mx-auto px-4 py-3 flex items-center justify-between border-b border-white/10">
                     <Link to="/" className="flex items-center gap-2">
@@ -458,7 +458,7 @@ const HotelBooking = () => {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.1 }}
-                        className="bg-white rounded-2xl shadow-2xl p-6 max-w-5xl mx-auto"
+                        className="travel-glass rounded-2xl p-6 max-w-5xl mx-auto"
                     >
                         {/* Room Options Toggle */}
                         <div className="flex items-center gap-4 mb-6 border-b border-gray-100 pb-4">
@@ -646,7 +646,7 @@ const HotelBooking = () => {
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ delay: idx * 0.1 }}
-                            className="bg-white rounded-2xl shadow-lg overflow-hidden hover:shadow-xl transition-shadow cursor-pointer group"
+                            className="travel-glass rounded-2xl overflow-hidden hover:shadow-xl transition-shadow cursor-pointer group"
                         >
                             <div className="h-32 overflow-hidden">
                                 <img 
@@ -707,7 +707,7 @@ const HotelBooking = () => {
                         animate={{ opacity: 1 }}
                         className="mb-6"
                     >
-                        <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 mb-4">
+                        <div className="travel-glass rounded-2xl p-4 mb-4">
                             <div className="flex flex-wrap items-center justify-between gap-4">
                                 <div>
                                     <h2 className="text-xl font-bold text-gray-800">
@@ -743,7 +743,7 @@ const HotelBooking = () => {
 
             {/* Info Section */}
             <section className="container mx-auto px-4 py-12">
-                <div className="bg-gradient-to-br from-[#041E42] to-[#0D47A1] rounded-3xl p-8 text-white">
+                <div className="bg-gradient-to-br from-sky-950 via-blue-900 to-cyan-800 rounded-3xl p-8 text-white">
                     <h3 className="text-2xl font-bold mb-8 text-center">
                         How Our AI Hotel Agent Works
                     </h3>
