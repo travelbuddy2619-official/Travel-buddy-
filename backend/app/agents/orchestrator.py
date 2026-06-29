@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 
@@ -47,7 +46,7 @@ class AgentOrchestrator:
         self.weather_api_key = weather_api_key
         self.rapidapi_key = rapidapi_key
         self.model = model
-        self.enable_planning_intelligence = os.getenv("ENABLE_PLANNING_INTELLIGENCE", "true").lower() == "true"
+        self.enable_planning_intelligence = True
         
         # Initialize LLM client for main planning
         self.llm_client = AsyncGroq(api_key=groq_api_key)
@@ -70,10 +69,14 @@ class AgentOrchestrator:
     
     async def plan_trip(
         self,
+        source: str,
         destination: str,
         start_date: str,
         end_date: str,
         budget: int,
+        travelers: int = 1,
+        transport_preference: str = "",
+        transportation_plan: Optional[Dict[str, Any]] = None,
         interests: List[str] = None,
         travel_style: str = "moderate",
     ) -> Dict[str, Any]:
@@ -107,9 +110,22 @@ class AgentOrchestrator:
             city_task = asyncio.create_task(
                 self.city_explorer_agent.explore_city(destination, [start_date, end_date])
             )
-            
-            # Wait for both
-            weather_data, city_data = await asyncio.gather(weather_task, city_task)
+
+            # Wait with bounded phase timeout to keep end-to-end generation responsive.
+            weather_data, city_data = await asyncio.gather(
+                self._with_timeout(
+                    weather_task,
+                    timeout_seconds=12,
+                    fallback={"success": False, "forecast": [], "recommendations": []},
+                    label="Weather Agent",
+                ),
+                self._with_timeout(
+                    city_task,
+                    timeout_seconds=12,
+                    fallback={},
+                    label="City Explorer Agent",
+                ),
+            )
             
             result["weather_data"] = weather_data
             result["city_highlights"] = city_data
@@ -123,27 +139,34 @@ class AgentOrchestrator:
             planning_insights = None
             if self.enable_planning_intelligence:
                 print("\n🧠 [Phase 1.5] Generating Planning Intelligence...")
-                planning_insights = await self._generate_planning_intelligence(
-                    destination=destination,
-                    start_date=start_date,
-                    end_date=end_date,
-                    budget=budget,
-                    interests=interests,
-                    weather_data=weather_data,
-                    city_data=city_data,
+                planning_insights = await self._with_timeout(
+                    self._generate_planning_intelligence(
+                        destination=destination,
+                        start_date=start_date,
+                        end_date=end_date,
+                        budget=budget,
+                        interests=interests,
+                        weather_data=weather_data,
+                        city_data=city_data,
+                    ),
+                    timeout_seconds=8,
+                    fallback=self._default_planning_insights(destination),
+                    label="Planning Intelligence",
                 )
                 print("   ✓ Planning intelligence generated")
-            else:
-                print("\n🧠 [Phase 1.5] Skipped extra planning intelligence (fast mode)")
             
             # ===== PHASE 2: Generate Base Itinerary =====
             print("\n📝 [Phase 2] Generating Optimized Itinerary...")
             
             base_itinerary = await self._generate_base_itinerary(
+                source=source,
                 destination=destination,
                 start_date=start_date,
                 end_date=end_date,
                 budget=budget,
+                travelers=travelers,
+                transport_preference=transport_preference,
+                transportation_plan=transportation_plan,
                 interests=interests,
                 travel_style=travel_style,
                 weather_context=weather_data,
@@ -152,8 +175,9 @@ class AgentOrchestrator:
             )
             
             if not base_itinerary:
-                result["errors"].append("Failed to generate base itinerary")
-                return result
+                raise ValueError(
+                    "Base itinerary generation failed: the planner did not return valid JSON."
+                )
             
             print(f"   ✓ Generated {len(base_itinerary.get('days', []))} days itinerary")
             
@@ -216,10 +240,14 @@ class AgentOrchestrator:
     
     async def _generate_base_itinerary(
         self,
+        source: str,
         destination: str,
         start_date: str,
         end_date: str,
         budget: int,
+        travelers: int,
+        transport_preference: str,
+        transportation_plan: Optional[Dict[str, Any]],
         interests: List[str],
         travel_style: str,
         weather_context: Dict,
@@ -250,6 +278,22 @@ CITY HIGHLIGHTS (from City Explorer Agent):
 - Famous Food: {', '.join(famous_food) if famous_food else 'Various local cuisines'}
 - Famous Restaurants: {len(city_context.get('famous_restaurants', []))} iconic places identified
 - Local Tips: {len(city_context.get('local_tips', []))} tips available
+"""
+
+        selected_transport = (transportation_plan or {}).get("selectedOption") or {}
+        transport_context = ""
+        if transportation_plan:
+            transport_context = f"""
+TRANSPORTATION PLAN (must be reflected in the itinerary):
+- Origin: {source}
+- Destination: {destination}
+- Selected mode: {transport_preference}
+- Travel date: {(transportation_plan or {}).get('travelDate', start_date)}
+- Selected option: {self._format_transport_option(selected_transport, transport_preference)}
+- Search summary: {(transportation_plan or {}).get('searchSummary', 'No summary available')}
+
+Use this as the first major travel block on Day 1. Do not schedule sightseeing before arrival.
+If departure or arrival time is available, build Day 1 around the arrival time. Include the travel cost in transport budget.
 """
         
         # Build planning intelligence context
@@ -289,19 +333,28 @@ PLANNING INTELLIGENCE (APPLY THESE TO CREATE AN OPTIMIZED ITINERARY):
         prompt = f"""You are an expert travel planner creating a detailed day-by-day itinerary.
 
 TRIP DETAILS:
+- Origin: {source}
 - Destination: {destination}
 - Start Date: {start_date}
 - End Date: {end_date}
 - Duration: {num_days} days
 - Budget: ₹{budget:,} (Indian Rupees)
+- Travelers: {travelers}
+- Preferred Transport: {transport_preference}
 - Interests: {', '.join(interests) if interests else 'General sightseeing'}
 - Travel Style: {travel_style}
 
 {weather_summary}
 {city_summary}
+{transport_context}
 {planning_context}
 
 CRITICAL REQUIREMENTS:
+
+0. TRIP ARRIVAL TRANSPORT (MANDATORY):
+   - Include the origin-to-destination journey on Day 1 using the selected transport option above.
+   - Mention departure time, arrival time, duration, price per person, and data source/API type when known.
+   - Do not begin destination activities until after the traveler reaches {destination}.
 
 1. REALISTIC TIMING (VERY IMPORTANT):
    - Famous temples (Tirupati, Meenakshi, etc.): 4-8 hours including queue
@@ -387,7 +440,7 @@ Return ONLY valid JSON, no additional text."""
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
-                max_tokens=4000,
+                max_tokens=6000,
             )
             
             content = response.choices[0].message.content.strip()
@@ -398,12 +451,231 @@ Return ONLY valid JSON, no additional text."""
                 content = content.split("```json")[1].split("```")[0]
             elif "```" in content:
                 content = content.split("```")[1].split("```")[0]
+            content = self._extract_json_object(content)
             
             return json.loads(content)
             
         except Exception as e:
             print(f"✗ [Orchestrator] Base itinerary generation failed: {e}")
             return None
+
+    def _extract_json_object(self, content: str) -> str:
+        """Extract the outermost JSON object from an LLM response."""
+        content = content.strip()
+        start = content.find("{")
+        end = content.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return content[start:end + 1]
+        return content
+
+    def _format_transport_option(self, option: Dict[str, Any], mode: str) -> str:
+        """Format a transport option for the planner prompt."""
+        if not option:
+            return "No option found; use a realistic fallback and mark it as estimated"
+
+        name_parts = [
+            option.get("airline"),
+            option.get("flight_number"),
+            option.get("train_name"),
+            option.get("train_number"),
+            option.get("operator"),
+            option.get("bus_type"),
+            option.get("vehicle_type"),
+            option.get("name"),
+        ]
+        name = " ".join(str(part) for part in name_parts if part).strip() or mode or "Transport"
+        departure = option.get("departure_time") or option.get("start_time") or "unknown departure"
+        arrival = option.get("arrival_time") or option.get("end_time") or "unknown arrival"
+        duration = option.get("duration") or "duration unknown"
+        price = option.get("price_per_person")
+        source = option.get("data_source") or "unknown source"
+        real_data = "real/live data" if option.get("is_real_data") else "estimated data"
+        price_text = f"Rs {price:,} per person" if isinstance(price, (int, float)) else "price unknown"
+
+        return f"{name}; depart {departure}; arrive {arrival}; duration {duration}; {price_text}; {source}; {real_data}"
+
+    def _fallback_base_itinerary(
+        self,
+        source: str,
+        destination: str,
+        start_date: str,
+        end_date: str,
+        budget: int,
+        travelers: int,
+        transport_preference: str,
+        transportation_plan: Optional[Dict[str, Any]],
+        city_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Create a valid itinerary if the LLM response is malformed or unavailable."""
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+        num_days = (end - start).days + 1
+        selected = (transportation_plan or {}).get("selectedOption") or {}
+        famous_food = city_data.get("famous_food", []) if isinstance(city_data, dict) else []
+        food_tip = famous_food[0].get("name") if famous_food and isinstance(famous_food[0], dict) else "local cuisine"
+
+        days = []
+        for offset in range(num_days):
+            day_date = (start + timedelta(days=offset)).strftime("%Y-%m-%d")
+            schedule = []
+            if offset == 0:
+                if selected:
+                    departure = selected.get("departure_time") or "Morning"
+                    arrival = selected.get("arrival_time") or "Arrival time varies"
+                    schedule.append({
+                        "time": departure,
+                        "activity": f"Travel from {source} to {destination} by {transport_preference}",
+                        "description": self._format_transport_option(selected, transport_preference),
+                        "duration": selected.get("duration") or "Varies",
+                        "tips": "Verify live availability and booking details before departure.",
+                        "isMeal": False,
+                    })
+                    schedule.append({
+                        "time": arrival,
+                        "activity": f"Arrive in {destination} and transfer to hotel",
+                        "duration": "1 hour",
+                        "tips": "Keep booking IDs, local ID proof, and hotel address handy.",
+                        "isMeal": False,
+                    })
+                else:
+                    schedule.append({
+                        "time": "Morning",
+                        "activity": f"Travel from {source} to {destination}",
+                        "duration": "Varies",
+                        "tips": "Transport data was unavailable; verify options before travel.",
+                        "isMeal": False,
+                    })
+                schedule.extend([
+                    {
+                        "time": "13:00",
+                        "activity": "Lunch",
+                        "duration": "1 hour",
+                        "tips": f"Try {food_tip}.",
+                        "isMeal": True,
+                        "mealType": "lunch",
+                    },
+                    {
+                        "time": "16:00",
+                        "activity": f"Easy local orientation in {destination}",
+                        "duration": "2 hours",
+                        "place": {"name": f"{destination} local market", "type": "market"},
+                        "tips": "Keep the first day light after arrival.",
+                        "isMeal": False,
+                    },
+                    {
+                        "time": "20:00",
+                        "activity": "Dinner",
+                        "duration": "1 hour",
+                        "tips": "Choose a restaurant close to the hotel.",
+                        "isMeal": True,
+                        "mealType": "dinner",
+                    },
+                ])
+            else:
+                schedule = [
+                    {
+                        "time": "08:30",
+                        "activity": "Breakfast",
+                        "duration": "45 minutes",
+                        "isMeal": True,
+                        "mealType": "breakfast",
+                    },
+                    {
+                        "time": "10:00",
+                        "activity": f"Explore key attractions in {destination}",
+                        "duration": "3 hours",
+                        "place": {"name": f"{destination} highlights", "type": "sightseeing"},
+                        "tips": "Group nearby places and avoid peak afternoon heat.",
+                        "isMeal": False,
+                    },
+                    {
+                        "time": "13:30",
+                        "activity": "Lunch",
+                        "duration": "1 hour",
+                        "tips": f"Try {food_tip}.",
+                        "isMeal": True,
+                        "mealType": "lunch",
+                    },
+                    {
+                        "time": "16:00",
+                        "activity": "Leisure and local experiences",
+                        "duration": "2 hours",
+                        "place": {"name": f"{destination} cultural area", "type": "local experience"},
+                        "isMeal": False,
+                    },
+                    {
+                        "time": "20:00",
+                        "activity": "Dinner",
+                        "duration": "1 hour",
+                        "isMeal": True,
+                        "mealType": "dinner",
+                    },
+                ]
+
+            days.append({
+                "day": offset + 1,
+                "date": day_date,
+                "theme": "Arrival and orientation" if offset == 0 else f"{destination} exploration",
+                "schedule": schedule,
+            })
+
+        transport_total = 0
+        if selected:
+            transport_total = selected.get("total_price") or selected.get("price_per_person", 0) * max(travelers, 1)
+
+        return {
+            "destination": destination,
+            "startDate": start_date,
+            "endDate": end_date,
+            "totalBudget": budget,
+            "currency": "INR",
+            "days": days,
+            "packingList": ["comfortable clothes", "walking shoes", "ID proof", "phone charger", "water bottle"],
+            "budgetBreakdown": {
+                "accommodation": int(budget * 0.35),
+                "food": int(budget * 0.25),
+                "transport": transport_total,
+                "activities": int(budget * 0.20),
+            },
+            "emergencyContacts": ["Local emergency services", "Hotel front desk"],
+        }
+
+    async def _with_timeout(self, awaitable, timeout_seconds: int, fallback: Any, label: str):
+        """Run awaitable with timeout and return fallback on timeout/errors."""
+        try:
+            return await asyncio.wait_for(awaitable, timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            print(f"⚠️ [{label}] Timed out after {timeout_seconds}s; continuing with fallback")
+            return fallback
+        except Exception as e:
+            print(f"⚠️ [{label}] Failed: {e}; continuing with fallback")
+            return fallback
+
+    def _default_planning_insights(self, destination: str) -> Dict[str, Any]:
+        return {
+            "routeOptimization": f"Group nearby attractions in {destination} to minimize travel",
+            "crowdTiming": [
+                {"place": "Popular temples", "bestTime": "Early morning 6-8 AM", "avoidTime": "12-2 PM, 5-7 PM"}
+            ],
+            "weatherRouting": [
+                {"day": 1, "suggestion": "Avoid outdoor activities during midday heat"}
+            ],
+            "budgetGuidance": "Budget appears reasonable for this trip",
+            "ticketingNotes": "Check advance booking for popular attractions",
+            "transitRecommendations": "Use local auto-rickshaws (₹50-150) or cabs (₹200-500)",
+            "etiquetteTips": [
+                "Dress modestly at religious sites",
+                "Remove footwear before entering temples",
+                "Respect photography restrictions"
+            ],
+            "safetyTips": [
+                "Keep valuables secure in crowds",
+                "Use registered transport services"
+            ],
+            "foodTrail": [
+                {"dish": "Local specialty", "area": "Near main attractions"}
+            ]
+        }
     
     def _format_crowd_tips(self, crowd_data: List) -> str:
         """Format crowd timing data for prompt."""

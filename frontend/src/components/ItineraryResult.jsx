@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MapPin, Star, Sun, Thermometer, Utensils, Clock, Camera, Navigation, Lightbulb, Briefcase, Phone, Globe, IndianRupee, AlertTriangle, Info, Ticket, X, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from 'lucide-react';
+import { MapPin, Star, Sun, Thermometer, Utensils, Clock, Camera, Navigation, Lightbulb, Briefcase, Phone, Globe, IndianRupee, AlertTriangle, Info, Ticket, X, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plane, Train, Bus, Car, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Image Lightbox Modal Component
@@ -151,6 +151,24 @@ const WeatherChip = ({ day }) => (
         </div>
     </div>
 );
+
+const getTransportIcon = (mode = '') => {
+    const normalized = mode.toLowerCase();
+    if (normalized.includes('flight')) return Plane;
+    if (normalized.includes('train')) return Train;
+    if (normalized.includes('bus')) return Bus;
+    if (normalized.includes('car')) return Car;
+    return Navigation;
+};
+
+const getTransportName = (option = {}, mode = '') => {
+    const normalized = mode.toLowerCase();
+    if (normalized.includes('flight')) return `${option.airline || 'Flight'} ${option.flight_number || ''}`.trim();
+    if (normalized.includes('train')) return `${option.train_name || 'Train'} ${option.train_number ? `#${option.train_number}` : ''}`.trim();
+    if (normalized.includes('bus')) return `${option.operator || 'Bus'} ${option.bus_type || ''}`.trim();
+    if (normalized.includes('car')) return option.name || option.vehicle_type || 'Car transfer';
+    return option.name || 'Transport option';
+};
 
 const ReviewHighlights = ({ reviews }) => (
     <div className="space-y-2">
@@ -725,7 +743,7 @@ const getDayHeroImage = (dayPlan) => {
     return null;
 };
 
-const ItineraryResult = ({ data }) => {
+const ItineraryResult = ({ data, onSave, canSave = false, isSaving = false, saveMessage = '' }) => {
     if (!data) return null;
 
     const containerVariants = { hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.1 } } };
@@ -742,7 +760,10 @@ const ItineraryResult = ({ data }) => {
     // New multi-agent data
     const weather = data.weather;
     const cityHighlights = data.cityHighlights;
+    const transportationPlan = data.transportationPlan;
     const days = data.days || [];
+    const selectedTransport = transportationPlan?.selectedOption;
+    const TransportIcon = getTransportIcon(transportationPlan?.mode || details?.transportPreference || '');
 
     const [activeDay, setActiveDay] = useState(days[0]?.day || 1);
     const [collapsedDays, setCollapsedDays] = useState({});
@@ -847,6 +868,18 @@ const ItineraryResult = ({ data }) => {
                     <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-fuchsia-500 via-cyan-400 to-emerald-400" />
                     <h1 className="text-4xl font-black text-slate-800 mb-4">{data.title || `Trip to ${destination}`}</h1>
                     <p className="text-lg text-gray-600 mb-6 max-w-3xl">{data.summary || `Your personalized ${data.days?.length || 0}-day itinerary for ${destination}`}</p>
+                    <div className="flex flex-wrap items-center gap-3 mb-6">
+                        <button
+                            onClick={onSave}
+                            disabled={isSaving}
+                            className="travel-cta rounded-xl px-4 py-2 font-semibold text-white disabled:opacity-60"
+                        >
+                            {canSave ? (isSaving ? 'Saving...' : 'Save Itinerary') : 'Login to Save Itinerary'}
+                        </button>
+                        {saveMessage && (
+                            <span className="text-sm text-slate-600">{saveMessage}</span>
+                        )}
+                    </div>
                     
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm text-gray-600">
                         <div>
@@ -881,6 +914,73 @@ const ItineraryResult = ({ data }) => {
                         )}
                     </div>
                 </motion.div>
+
+                {/* Transportation Plan */}
+                {transportationPlan && (
+                    <motion.div variants={itemVariants} className="bg-white border border-sky-100 rounded-3xl shadow-sm p-6">
+                        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                            <div className="flex items-start gap-4">
+                                <div className="w-12 h-12 rounded-2xl bg-sky-100 text-sky-700 flex items-center justify-center flex-shrink-0">
+                                    <TransportIcon className="w-6 h-6" />
+                                </div>
+                                <div>
+                                    <p className="text-xs uppercase tracking-wide text-slate-400 font-semibold">Getting There</p>
+                                    <h2 className="text-xl font-bold text-slate-800">
+                                        {transportationPlan.origin} to {transportationPlan.destination}
+                                    </h2>
+                                    <p className="text-sm text-slate-500 mt-1">
+                                        {transportationPlan.mode} on {transportationPlan.travelDate}
+                                    </p>
+                                </div>
+                            </div>
+                            {selectedTransport?.booking_url && (
+                                <a
+                                    href={selectedTransport.booking_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-sky-200 px-4 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-50"
+                                >
+                                    Book / Verify <ExternalLink className="w-4 h-4" />
+                                </a>
+                            )}
+                        </div>
+
+                        {selectedTransport ? (
+                            <div className="mt-5 grid md:grid-cols-5 gap-3">
+                                <div className="md:col-span-2 rounded-2xl bg-slate-50 p-4">
+                                    <p className="text-xs uppercase text-slate-400 font-semibold">Selected Option</p>
+                                    <p className="font-bold text-slate-800 mt-1">
+                                        {getTransportName(selectedTransport, transportationPlan.mode)}
+                                    </p>
+                                    <p className="text-xs text-slate-500 mt-2">
+                                        {selectedTransport.is_real_data ? 'Live/API data' : 'Estimated data'} • {selectedTransport.data_source || transportationPlan.dataSource}
+                                    </p>
+                                </div>
+                                <div className="rounded-2xl bg-slate-50 p-4">
+                                    <p className="text-xs uppercase text-slate-400 font-semibold">Departure</p>
+                                    <p className="font-bold text-slate-800 mt-1">{formatTime12hr(selectedTransport.departure_time) || 'Varies'}</p>
+                                </div>
+                                <div className="rounded-2xl bg-slate-50 p-4">
+                                    <p className="text-xs uppercase text-slate-400 font-semibold">Arrival</p>
+                                    <p className="font-bold text-slate-800 mt-1">{formatTime12hr(selectedTransport.arrival_time) || 'Varies'}</p>
+                                </div>
+                                <div className="rounded-2xl bg-slate-50 p-4">
+                                    <p className="text-xs uppercase text-slate-400 font-semibold">Cost / Person</p>
+                                    <p className="font-bold text-slate-800 mt-1">{formatIndianCurrency(selectedTransport.price_per_person)}</p>
+                                </div>
+                                <div className="md:col-span-5 rounded-2xl bg-sky-50 border border-sky-100 p-4 flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-700">
+                                    <span><strong>Duration:</strong> {selectedTransport.duration || 'Varies'}</span>
+                                    {selectedTransport.stops && <span><strong>Stops:</strong> {selectedTransport.stops}</span>}
+                                    {selectedTransport.class && <span><strong>Class:</strong> {selectedTransport.class}</span>}
+                                    {selectedTransport.distance_km && <span><strong>Distance:</strong> {selectedTransport.distance_km} km</span>}
+                                    {transportationPlan.searchSummary && <span>{transportationPlan.searchSummary}</span>}
+                                </div>
+                            </div>
+                        ) : (
+                            <p className="mt-4 text-sm text-slate-600">No transport option was found for this route. Try a different mode or date.</p>
+                        )}
+                    </motion.div>
+                )}
 
                 {/* Weather Section from Weather Agent */}
                 {weather && (weather.summary || weather.forecasts?.length > 0 || weather.recommendations?.length > 0) && (
