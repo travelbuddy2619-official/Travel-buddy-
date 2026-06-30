@@ -243,7 +243,7 @@ function AppContent() {
   return (
     <>
       <ScrollToTopOnRouteChange />
-      <FloatingChatbot />
+      <FloatingChatbot currentItinerary={itinerary} onItineraryUpdate={handleItineraryUpdate} />
       <Routes>
         <Route
           path="/"

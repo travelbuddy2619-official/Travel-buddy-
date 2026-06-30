@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 
@@ -32,7 +33,6 @@ class AgentOrchestrator:
     6. City Explorer Agent - Researches city-level highlights
     7. Replanning Agent - Handles user modifications via chat
     """
-    
     def __init__(
         self,
         groq_api_key: str,
@@ -47,10 +47,10 @@ class AgentOrchestrator:
         self.rapidapi_key = rapidapi_key
         self.model = model
         self.enable_planning_intelligence = True
-        
+
         # Initialize LLM client for main planning
         self.llm_client = AsyncGroq(api_key=groq_api_key)
-        
+
         # Initialize all specialized agents
         self.weather_agent = WeatherAgent(api_key=weather_api_key)
         self.place_research_agent = PlaceResearchAgent(serper_api_key=serper_api_key, rapidapi_key=rapidapi_key)
@@ -58,7 +58,7 @@ class AgentOrchestrator:
         self.dining_agent = DiningAgent(serper_api_key=serper_api_key, rapidapi_key=rapidapi_key)
         self.city_explorer_agent = CityExplorerAgent(serper_api_key=serper_api_key, groq_api_key=groq_api_key, rapidapi_key=rapidapi_key)
         self.replanning_agent = ReplanningAgent(groq_api_key=groq_api_key, model=model)
-        
+
         print("🤖 [Orchestrator] Multi-Agent System Initialized")
         print(f"   ├── Weather Agent")
         print(f"   ├── Place Research Agent")
@@ -66,7 +66,7 @@ class AgentOrchestrator:
         print(f"   ├── Dining Agent")
         print(f"   ├── City Explorer Agent")
         print(f"   └── Replanning Agent")
-    
+
     async def plan_trip(
         self,
         source: str,
@@ -174,10 +174,20 @@ class AgentOrchestrator:
                 planning_insights=planning_insights,
             )
             
-            if not base_itinerary:
-                raise ValueError(
-                    "Base itinerary generation failed: the planner did not return valid JSON."
+            if not base_itinerary or not isinstance(base_itinerary, dict) or not base_itinerary.get("days"):
+                print("⚠️ [Orchestrator] Base itinerary generation failed or returned invalid data; using fallback itinerary")
+                base_itinerary = self._fallback_base_itinerary(
+                    source=source,
+                    destination=destination,
+                    start_date=start_date,
+                    end_date=end_date,
+                    budget=budget,
+                    travelers=travelers,
+                    transport_preference=transport_preference,
+                    transportation_plan=transportation_plan,
+                    city_data=city_data,
                 )
+                result["errors"].append("Base itinerary generation failed; fallback itinerary used.")
             
             print(f"   ✓ Generated {len(base_itinerary.get('days', []))} days itinerary")
             
@@ -1046,7 +1056,8 @@ Return ONLY valid JSON. Be specific to {destination}."""
         self,
         message: str,
         current_itinerary: Dict[str, Any],
-        chat_history: List[Dict[str, str]] = None
+        chat_history: List[Dict[str, str]] = None,
+        session_state: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
         Smart Agent-Router Chat System.
@@ -1055,7 +1066,7 @@ Return ONLY valid JSON. Be specific to {destination}."""
         print(f"\n💬 [Orchestrator] Smart Chat Processing: '{message[:50]}...'")
         
         # Step 1: Detect intent and required action
-        intent = await self._detect_chat_intent(message, current_itinerary)
+        intent = await self._detect_chat_intent(message, current_itinerary, session_state=session_state)
         print(f"   Intent: {intent.get('intent_type')} | Action: {intent.get('action')}")
         
         result = {
@@ -1066,15 +1077,25 @@ Return ONLY valid JSON. Be specific to {destination}."""
             "action": None,  # Frontend action command
             "action_data": None,  # Data for the action
             "agent_used": None,
+            "needs_clarification": False,
+            "suggestions": [],
+            "task_type": None,
         }
         
         intent_type = intent.get("intent_type", "general_chat")
+        active_draft = bool((session_state or {}).get("draft_trip_request")) or (session_state or {}).get("mode") == "create_itinerary"
+        has_itinerary = bool(current_itinerary and current_itinerary.get("days"))
+        if has_itinerary and not active_draft and intent_type == "create_itinerary" and not self._looks_like_new_trip_request(message):
+            intent_type = "modify_itinerary"
         
         try:
             # Route to appropriate handler based on intent
             if intent_type == "navigation":
                 result = await self._handle_navigation(intent, result)
                 
+            elif intent_type == "create_itinerary":
+                result = await self._handle_create_itinerary_request(message, current_itinerary, intent, result, session_state)
+
             elif intent_type == "modify_itinerary":
                 result = await self._handle_modify_itinerary(message, current_itinerary, intent, result)
                 
@@ -1109,16 +1130,37 @@ Return ONLY valid JSON. Be specific to {destination}."""
             
         return result
     
-    async def _detect_chat_intent(self, message: str, itinerary: Dict[str, Any]) -> Dict[str, Any]:
+    async def _detect_chat_intent(
+        self,
+        message: str,
+        itinerary: Dict[str, Any],
+        session_state: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
         """Detect user intent from chat message using LLM."""
         
         destination = itinerary.get("destination", "the destination")
+        pending_trip = (session_state or {}).get("draft_trip_request") or {}
+        pending_summary = json.dumps(pending_trip) if pending_trip else "{}"
+
+        if pending_trip or (session_state or {}).get("mode") == "create_itinerary":
+            return {
+                "intent_type": "create_itinerary",
+                "action": None,
+                "target": None,
+                "details": "Continue collecting trip details",
+                "trip_request": self._extract_trip_request_from_message(message, pending_trip),
+                "missing_fields": [],
+                "clarifying_question": None,
+            }
         
         prompt = f"""Analyze this user message and detect the intent. User is on a travel planning website with an itinerary for {destination}.
+Only include trip_request fields that the user explicitly gave. Do not invent defaults for people, budget, transport, interests, or travelStyle.
 
 User Message: "{message}"
+Pending Trip Draft: {pending_summary}
 
 Classify into ONE of these intent types:
+1. "create_itinerary" - User wants a new itinerary planned from scratch or is supplying missing trip details
 1. "navigation" - User wants to go to a section/page (about, contact, home, booking, itinerary form, etc.)
 2. "modify_itinerary" - User wants to change/add/remove something from their itinerary
 3. "weather_query" - User asks about weather at destination
@@ -1134,18 +1176,31 @@ Return JSON:
     "intent_type": "one of the above",
     "action": "specific action if applicable (e.g., 'scroll_to_about', 'open_flight_booking')",
     "target": "what user is asking about (place name, day number, etc.)",
-    "details": "additional context extracted from message"
+    "details": "additional context extracted from message",
+    "trip_request": {{
+        "source": "origin city if provided",
+        "destination": "destination city if provided",
+        "startDate": "YYYY-MM-DD if provided",
+        "endDate": "YYYY-MM-DD if provided",
+        "people": null,
+        "budget": null,
+        "transport": null,
+        "interests": [],
+        "travelStyle": null
+    }},
+    "missing_fields": ["source", "destination", "startDate", "endDate", "people", "budget", "transport"],
+    "clarifying_question": "single short question to ask next if fields are missing"
 }}"""
 
         try:
             response = await self.llm_client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are an intent classifier. Return valid JSON only."},
+                    {"role": "system", "content": "You are an intent classifier. Return valid JSON only. Be concise."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.2,
-                max_tokens=300,
+                temperature=0.1,
+                max_tokens=600,
             )
             
             content = response.choices[0].message.content.strip()
@@ -1158,18 +1213,244 @@ Return JSON:
                 content = content[content.find("{"):]
             if not content.endswith("}"):
                 content = content[:content.rfind("}")+1]
-                
-            return json.loads(content)
+
+            parsed = json.loads(content)
+            if (
+                itinerary
+                and itinerary.get("days")
+                and not pending_trip
+                and not (session_state or {}).get("mode") == "create_itinerary"
+                and self._looks_like_modification_request(message)
+                and not self._looks_like_new_trip_request(message)
+            ):
+                parsed["intent_type"] = "modify_itinerary"
+
+            return parsed
             
         except Exception as e:
             print(f"   ⚠️ Intent detection failed: {e}")
-            return {"intent_type": "general_chat", "action": None, "target": None, "details": None}
+            # Keyword-based fallback classifier
+            msg_lower = message.lower()
+            fallback_type = "general_chat"
+            if self._looks_like_modification_request(message):
+                fallback_type = "modify_itinerary"
+            elif any(w in msg_lower for w in ["plan", "trip", "itinerary", "travel", "journey", "visit"]):
+                fallback_type = "create_itinerary"
+            elif any(w in msg_lower for w in ["flight", "fly", "air"]):
+                fallback_type = "flight_search"
+            elif any(w in msg_lower for w in ["hotel", "stay", "accommodation", "resort"]):
+                fallback_type = "hotel_search"
+            elif any(w in msg_lower for w in ["train", "rail"]):
+                fallback_type = "train_search"
+            elif any(w in msg_lower for w in ["bus", "coach"]):
+                fallback_type = "bus_search"
+            elif any(w in msg_lower for w in ["change", "modify", "update", "add", "remove"]):
+                fallback_type = "modify_itinerary"
+            return {
+                "intent_type": fallback_type,
+                "action": None,
+                "target": None,
+                "details": None,
+                "search_params": {},
+                "trip_request": self._extract_trip_request_from_message(message),
+                "missing_fields": [],
+                "clarifying_question": None,
+            }
+
+    def _looks_like_modification_request(self, message: str) -> bool:
+        """Identify edit-style requests that should update the existing itinerary."""
+        lower = (message or "").lower()
+
+        explicit_modifiers = [
+            "change", "modify", "update", "replace", "swap", "remove", "add", "insert",
+            "skip", "instead", "rather than", "prefer", "keep", "make it", "only"
+        ]
+        if any(marker in lower for marker in explicit_modifiers):
+            return True
+
+        preference_words = ["veg", "vegetarian", "vegan", "non-veg", "5-star", "star", "luxury", "budget", "cheaper", "expensive"]
+        itinerary_targets = ["hotel", "hotels", "restaurant", "restaurants", "activity", "activities", "museum", "museums", "day", "transport", "flight", "train"]
+        if any(word in lower for word in preference_words) and any(target in lower for target in itinerary_targets):
+            return True
+
+        return False
+
+    def _looks_like_new_trip_request(self, message: str) -> bool:
+        """Return True when the user is clearly starting a new itinerary."""
+        lower = (message or "").lower()
+        if any(phrase in lower for phrase in ["new trip", "new itinerary", "plan a trip", "create itinerary", "make itinerary"]):
+            return True
+        return bool(re.search(r"\bfrom\s+.+\s+to\s+.+", lower))
+
+    def _extract_trip_request_from_message(self, message: str, draft: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Extract trip fields from short follow-up answers without relying on intent classification."""
+        text = (message or "").strip()
+        lower = text.lower()
+        draft = draft or {}
+        extracted: Dict[str, Any] = {}
+
+        route_match = re.search(
+            r"\bfrom\s+([a-zA-Z .'-]+?)\s+(?:to|towards)\s+([a-zA-Z .'-]+?)(?:\s|$|,|\.|\bon\b|\bfrom\b)",
+            text,
+            re.IGNORECASE,
+        )
+        if route_match:
+            extracted["source"] = route_match.group(1).strip(" ,.")
+            extracted["destination"] = route_match.group(2).strip(" ,.")
+        else:
+            source_match = re.search(r"\bfrom\s+([a-zA-Z .'-]+)", text, re.IGNORECASE)
+            destination_match = re.search(r"\bto\s+([a-zA-Z .'-]+)", text, re.IGNORECASE)
+            if source_match and not draft.get("source"):
+                extracted["source"] = source_match.group(1).strip(" ,.")
+            if destination_match and not draft.get("destination"):
+                extracted["destination"] = destination_match.group(1).strip(" ,.")
+
+        date_matches = re.findall(r"\b(20\d{2}-\d{2}-\d{2})\b", text)
+        if date_matches:
+            if "end" in lower or "return" in lower or "till" in lower or "until" in lower:
+                extracted["endDate"] = date_matches[-1]
+            elif "start" in lower or "depart" in lower or "leave" in lower:
+                extracted["startDate"] = date_matches[0]
+            elif not draft.get("startDate"):
+                extracted["startDate"] = date_matches[0]
+            elif not draft.get("endDate"):
+                extracted["endDate"] = date_matches[0]
+
+            if len(date_matches) >= 2:
+                extracted["startDate"] = date_matches[0]
+                extracted["endDate"] = date_matches[1]
+
+        people_match = re.search(r"\b(\d+)\s*(?:people|persons|person|travellers|travelers|adults|pax)\b", lower)
+        if people_match:
+            extracted["people"] = int(people_match.group(1))
+
+        budget_match = re.search(r"(?:budget|under|around|rs\.?|inr|₹)\s*([0-9][0-9,]*)", lower)
+        if budget_match:
+            extracted["budget"] = int(budget_match.group(1).replace(",", ""))
+
+        bare_number_match = re.fullmatch(r"\s*([0-9][0-9,]*)\s*", text)
+        if bare_number_match:
+            number = int(bare_number_match.group(1).replace(",", ""))
+            if not draft.get("people"):
+                extracted["people"] = number
+            elif not draft.get("budget"):
+                extracted["budget"] = number
+
+        for transport in ["flight", "train", "bus", "car"]:
+            if transport in lower:
+                extracted["transport"] = transport.title()
+                break
+
+        interest_keywords = ["food", "temple", "temples", "beach", "beaches", "shopping", "history", "nature", "nightlife"]
+        interests = [keyword for keyword in interest_keywords if keyword in lower]
+        if interests:
+            extracted["interests"] = sorted(set(interests))
+
+        for style in ["relaxed", "moderate", "packed", "luxury", "budget"]:
+            if style in lower:
+                extracted["travelStyle"] = style
+                break
+
+        return extracted
+
+    async def _handle_create_itinerary_request(
+        self,
+        message: str,
+        itinerary: Dict[str, Any],
+        intent: Dict,
+        result: Dict,
+        session_state: Dict[str, Any] = None,
+    ) -> Dict:
+        """Handle creation of a new itinerary through chat."""
+        draft = dict((session_state or {}).get("draft_trip_request") or {})
+        trip_request = intent.get("trip_request") or {}
+        if not draft and (session_state or {}).get("mode") != "create_itinerary":
+            trip_request = self._remove_unmentioned_trip_defaults(message, trip_request)
+        merged = {**draft, **{k: v for k, v in trip_request.items() if v not in [None, "", []]}}
+
+        required = ["source", "destination", "startDate", "endDate", "people", "budget", "transport"]
+        missing = [field for field in required if not merged.get(field)]
+
+        if missing:
+            question = intent.get("clarifying_question") or self._clarifying_question_for_fields(missing)
+            result["reply"] = question
+            result["needs_clarification"] = True
+            result["task_type"] = "create_itinerary"
+            result["suggestions"] = self._clarification_suggestions(missing)
+            result["action"] = "collect_info"
+            result["action_data"] = {
+                "missing_fields": missing,
+                "draft_trip_request": merged,
+            }
+            return result
+
+        result["reply"] = "I’m building your itinerary now."
+        result["task_type"] = "create_itinerary"
+        result["action"] = "create_itinerary"
+        result["action_data"] = {"trip_request": merged}
+        result["suggestions"] = [
+            "Change transport to train",
+            "Add more food stops",
+            "Make it cheaper",
+        ]
+        return result
+
+    def _remove_unmentioned_trip_defaults(self, message: str, trip_request: Dict[str, Any]) -> Dict[str, Any]:
+        """Drop common classifier defaults so required fields are actually collected."""
+        lower = (message or "").lower()
+        cleaned = dict(trip_request or {})
+
+        if "people" in cleaned and not re.search(r"\b\d+\s*(?:people|persons|person|travellers|travelers|adults|pax)\b", lower):
+            cleaned.pop("people", None)
+
+        if "budget" in cleaned and not re.search(r"\b(?:budget|under|around|rs\.?|inr|₹|â‚¹)\s*[0-9]", lower):
+            cleaned.pop("budget", None)
+
+        if "transport" in cleaned and not any(mode in lower for mode in ["flight", "train", "bus", "car", "cab", "taxi"]):
+            cleaned.pop("transport", None)
+
+        if "travelStyle" in cleaned and not any(style in lower for style in ["relaxed", "moderate", "packed", "luxury", "budget"]):
+            cleaned.pop("travelStyle", None)
+
+        if cleaned.get("interests") and not any(str(interest).lower() in lower for interest in cleaned.get("interests", [])):
+            cleaned.pop("interests", None)
+
+        return cleaned
+
+    def _clarifying_question_for_fields(self, missing_fields: List[str]) -> str:
+        """Ask for the most important missing planning detail first."""
+        order = {
+            "source": "What city are you starting from?",
+            "destination": "What is your destination?",
+            "startDate": "What is the start date?",
+            "endDate": "What is the end date?",
+            "people": "How many travelers are going?",
+            "budget": "What is your budget per person?",
+            "transport": "Which transport do you want to use: flight, train, bus, or car?",
+        }
+        for key in ["source", "destination", "startDate", "endDate", "people", "budget", "transport"]:
+            if key in missing_fields:
+                return order[key]
+        return "What trip details should I use?"
+
+    def _clarification_suggestions(self, missing_fields: List[str]) -> List[str]:
+        """Return short suggestions to help the user respond quickly."""
+        mapping = {
+            "source": "From Mumbai",
+            "destination": "To Goa",
+            "startDate": "Start on 2026-07-01",
+            "endDate": "End on 2026-07-05",
+            "people": "2 travelers",
+            "budget": "Budget 15000",
+            "transport": "Use flight",
+        }
+        return [mapping[field] for field in missing_fields if field in mapping][:3]
     
     async def _handle_navigation(self, intent: Dict, result: Dict) -> Dict:
         """Handle navigation requests - scrolling to sections, opening pages."""
-        action = intent.get("action", "").lower()
-        target = intent.get("target", "").lower()
-        details = intent.get("details", "").lower()
+        action = (intent.get("action") or "").lower()
+        target = (intent.get("target") or "").lower()
+        details = (intent.get("details") or "").lower()
         
         # Determine navigation action
         nav_mapping = {
@@ -1208,6 +1489,12 @@ Return JSON:
     
     async def _handle_modify_itinerary(self, message: str, itinerary: Dict, intent: Dict, result: Dict) -> Dict:
         """Handle itinerary modification requests."""
+        if not itinerary or not itinerary.get("days"):
+            result["reply"] = "I need an existing itinerary before I can modify it. Create one first, then tell me what to change."
+            result["needs_clarification"] = True
+            result["task_type"] = "modify_itinerary"
+            result["suggestions"] = ["Create itinerary", "Plan a trip", "Add more details"]
+            return result
         
         # Process modification via replanning agent
         mod_result = await self.replanning_agent.process_modification(itinerary, message)
@@ -1301,7 +1588,7 @@ Return JSON:
         """Handle restaurant queries using Dining Agent."""
         destination = itinerary.get("destination", "")
         target = intent.get("target", "")
-        details = intent.get("details", "")
+        details = intent.get("details", "") or ""
         
         # Determine meal type from query
         meal_type = "lunch"  # default
@@ -1343,7 +1630,7 @@ Return JSON:
     async def _handle_city_query(self, itinerary: Dict, intent: Dict, result: Dict) -> Dict:
         """Handle city-related queries using City Explorer Agent."""
         destination = itinerary.get("destination", "")
-        target = intent.get("target", "").lower()
+        target = (intent.get("target") or "").lower()
         
         if destination:
             city_data = await self.city_explorer_agent.explore_city(destination, [])
@@ -1397,8 +1684,8 @@ Return JSON:
     
     async def _handle_booking_action(self, intent: Dict, result: Dict) -> Dict:
         """Handle booking-related actions."""
-        target = intent.get("target", "").lower()
-        details = intent.get("details", "").lower()
+        target = (intent.get("target") or "").lower()
+        details = (intent.get("details") or "").lower()
         combined = f"{target} {details}"
         
         if "flight" in combined:

@@ -4,6 +4,7 @@ Handles chat-based customizations and re-plans the itinerary based on user feedb
 """
 from __future__ import annotations
 
+import copy
 from typing import Optional, Dict, Any, List
 from groq import AsyncGroq
 
@@ -56,15 +57,24 @@ class ReplanningAgent:
                 context
             )
             
-            result["success"] = True
-            result["modified_itinerary"] = modified["itinerary"]
-            result["changes_made"] = modified["changes"]
-            result["explanation"] = modified["explanation"]
-            
-            print(f"✓ [Replanning Agent] Applied {len(modified['changes'])} changes")
-            
+            if self._is_modification_noop(current_itinerary, modified.get("itinerary"), modified.get("changes")):
+                result["success"] = False
+                result["modified_itinerary"] = current_itinerary
+                result["changes_made"] = modified.get("changes", [])
+                result["explanation"] = modified.get("explanation", "Could not apply the requested modification.")
+                print(f"✗ [Replanning Agent] Modification could not be applied: {result['explanation']}")
+            else:
+                result["success"] = True
+                result["modified_itinerary"] = modified["itinerary"]
+                result["changes_made"] = modified["changes"]
+                result["explanation"] = modified["explanation"]
+                print(f"✓ [Replanning Agent] Applied {len(modified['changes'])} changes")
         except Exception as e:
             print(f"✗ [Replanning Agent] Error: {e}")
+            result["success"] = False
+            result["modified_itinerary"] = current_itinerary
+            result["changes_made"] = []
+            result["explanation"] = str(e)
             result["error"] = str(e)
         
         return result
@@ -179,7 +189,7 @@ Keep the same JSON structure as the original itinerary."""
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.5,
-                max_tokens=4000,
+                max_tokens=6000,
             )
             
             import json
@@ -198,10 +208,26 @@ Keep the same JSON structure as the original itinerary."""
             # Return original itinerary if modification fails
             return {
                 "itinerary": itinerary,
-                "changes": ["Unable to apply changes - keeping original"],
-                "explanation": f"Error occurred: {str(e)}"
+                "changes": [],
+                "explanation": f"Error occurred while modifying itinerary: {str(e)}"
             }
     
+    def _is_modification_noop(
+        self,
+        original_itinerary: Dict[str, Any],
+        modified_itinerary: Optional[Dict[str, Any]],
+        changes: Optional[List[str]],
+    ) -> bool:
+        if not modified_itinerary or not isinstance(modified_itinerary, dict):
+            return True
+        if modified_itinerary == original_itinerary:
+            return True
+        if not changes:
+            return True
+        if len(changes) == 1 and "Unable to apply changes" in changes[0]:
+            return True
+        return False
+
     def _summarize_activities(self, itinerary: Dict[str, Any]) -> str:
         """Summarize activities in the itinerary."""
         activities = []
@@ -257,15 +283,18 @@ Keep the same JSON structure as the original itinerary."""
         messages = [
             {
                 "role": "system",
-                "content": """You are a helpful travel planning assistant. You can:
-1. Answer questions about the itinerary
-2. Suggest modifications based on user preferences
-3. Provide additional information about places in the itinerary
-4. Help with practical travel tips
+                "content": """You are a powerful agentic travel planning assistant with access to real-time data. You can:
+1. Create brand-new trip itineraries from scratch via conversation
+2. Modify existing itineraries (add/remove/replace activities, change days, update schedule)
+3. Find and compare flights, trains, buses via live API searches
+4. Find and compare hotels and accommodations
+5. Answer questions about destinations, weather, places, restaurants, visa, packing
+6. Provide local tips, crowd predictions, best-time-to-visit advice
+7. Help with travel budget planning in Indian Rupees (₹)
 
-Current itinerary context is provided. Be helpful and conversational.
-If the user wants to make changes, confirm what they want before suggesting modifications.
-All costs and budgets should be in Indian Rupees (₹)."""
+Always be proactive, helpful and specific. When the user asks you to modify something, do it directly.
+All costs and budgets should be in Indian Rupees (₹).
+If the user wants to make changes to the itinerary, confirm what changes you will make and apply them."""
             }
         ]
         

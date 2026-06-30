@@ -69,7 +69,7 @@ const ImageLightbox = ({ images, currentIndex, onClose, onNext, onPrev, placeNam
                         {images.map((img, idx) => (
                             <button
                                 key={idx}
-                                onClick={(e) => { e.stopPropagation(); }}
+                                onClick={(e) => { e.stopPropagation(); setCurrentImageIndex(idx); }}
                                 className={`flex-shrink-0 w-16 h-12 rounded-lg overflow-hidden border-2 transition-all ${
                                     idx === currentIndex ? 'border-white scale-110' : 'border-transparent opacity-60 hover:opacity-100'
                                 }`}
@@ -246,14 +246,21 @@ const RestaurantCard = ({ restaurant }) => {
     );
 };
 
+const normalizeImages = (images) => {
+    if (!images) return [];
+    if (Array.isArray(images)) return images.filter((img) => typeof img === 'string' && img.trim().length > 0);
+    if (typeof images === 'string') return [images];
+    return [];
+};
+
 const PlaceCard = ({ place }) => {
     const [lightboxOpen, setLightboxOpen] = useState(false);
     const [currentImageIndex, setCurrentImageIndex] = useState(0);
     
     if (!place) return null;
-    
-    // Check if we have real Google data (has rating AND reviews AND images)
-    const hasRealData = place.rating && place.totalReviews && place.images?.length > 0;
+
+    const placeImages = normalizeImages(place.images ?? place.photos);
+    const hasRealData = place.rating && place.totalReviews && placeImages.length > 0;
     const practicalInfo = place.practicalInfo;
     
     const openLightbox = (index) => {
@@ -264,11 +271,11 @@ const PlaceCard = ({ place }) => {
     const closeLightbox = () => setLightboxOpen(false);
     
     const nextImage = () => {
-        setCurrentImageIndex((prev) => (prev + 1) % place.images.length);
+        setCurrentImageIndex((prev) => (prev + 1) % placeImages.length);
     };
     
     const prevImage = () => {
-        setCurrentImageIndex((prev) => (prev - 1 + place.images.length) % place.images.length);
+        setCurrentImageIndex((prev) => (prev - 1 + placeImages.length) % placeImages.length);
     };
     
     return (
@@ -445,13 +452,13 @@ const PlaceCard = ({ place }) => {
                         )}
                     </div>
                     
-                    {place.images?.length > 0 && (
+                    {placeImages.length > 0 ? (
                         <div className="mt-3">
                             <p className="text-xs text-gray-400 uppercase mb-2 flex items-center gap-1">
                                 📷 Real Photos <span className="text-indigo-500 font-normal">(Click to enlarge)</span>
                             </p>
                             <div className="flex gap-2 overflow-x-auto pb-1">
-                                {place.images.slice(0, 4).map((img, idx) => (
+                                {placeImages.slice(0, 4).map((img, idx) => (
                                     <button
                                         key={idx}
                                         onClick={() => openLightbox(idx)}
@@ -466,21 +473,25 @@ const PlaceCard = ({ place }) => {
                                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 rounded-lg transition-all flex items-center justify-center">
                                             <Camera className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
                                         </div>
-                                        {idx === 3 && place.images.length > 4 && (
+                                        {idx === 3 && placeImages.length > 4 && (
                                             <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
-                                                <span className="text-white font-semibold">+{place.images.length - 4}</span>
+                                                <span className="text-white font-semibold">+{placeImages.length - 4}</span>
                                             </div>
                                         )}
                                     </button>
                                 ))}
                             </div>
                         </div>
+                    ) : (
+                        <div className="mt-3 rounded-xl bg-slate-100 border border-slate-200 p-4 text-xs text-slate-500">
+                            No place photos available yet.
+                        </div>
                     )}
                     
                     {/* Image Lightbox */}
                     {lightboxOpen && (
                         <ImageLightbox 
-                            images={place.images}
+                            images={placeImages}
                             currentIndex={currentImageIndex}
                             onClose={closeLightbox}
                             onNext={nextImage}
@@ -500,8 +511,9 @@ const MealRestaurantCard = ({ restaurant, mealType }) => {
     const [currentImageIndex, setCurrentImageIndex] = useState(0);
     
     if (!restaurant) return null;
-    
-    const hasRealData = restaurant.rating && restaurant.images?.length > 0;
+
+    const restaurantImages = normalizeImages(restaurant.images ?? restaurant.photos);
+    const hasRealData = restaurant.rating && restaurantImages.length > 0;
     
     const openLightbox = (index) => {
         setCurrentImageIndex(index);
@@ -511,11 +523,11 @@ const MealRestaurantCard = ({ restaurant, mealType }) => {
     const closeLightbox = () => setLightboxOpen(false);
     
     const nextImage = () => {
-        setCurrentImageIndex((prev) => (prev + 1) % restaurant.images.length);
+        setCurrentImageIndex((prev) => (prev + 1) % restaurantImages.length);
     };
     
     const prevImage = () => {
-        setCurrentImageIndex((prev) => (prev - 1 + restaurant.images.length) % restaurant.images.length);
+        setCurrentImageIndex((prev) => (prev - 1 + restaurantImages.length) % restaurantImages.length);
     };
     
     // Meal type emoji
@@ -625,13 +637,13 @@ const MealRestaurantCard = ({ restaurant, mealType }) => {
                     </div>
                     
                     {/* Restaurant Photos */}
-                    {restaurant.images?.length > 0 && (
+                    {restaurantImages.length > 0 ? (
                         <div className="mt-3">
                             <p className="text-xs text-gray-400 uppercase mb-2 flex items-center gap-1">
                                 📷 Food & Ambiance <span className="text-orange-500 font-normal">(Click to view)</span>
                             </p>
                             <div className="flex gap-2 overflow-x-auto pb-1">
-                                {restaurant.images.slice(0, 3).map((img, idx) => (
+                                {restaurantImages.slice(0, 3).map((img, idx) => (
                                     <button
                                         key={idx}
                                         onClick={() => openLightbox(idx)}
@@ -650,12 +662,16 @@ const MealRestaurantCard = ({ restaurant, mealType }) => {
                                 ))}
                             </div>
                         </div>
+                    ) : (
+                        <div className="mt-3 rounded-xl bg-orange-50 border border-orange-100 p-3 text-xs text-orange-700">
+                            No restaurant photos available yet.
+                        </div>
                     )}
                     
                     {/* Image Lightbox */}
                     {lightboxOpen && (
                         <ImageLightbox 
-                            images={restaurant.images}
+                            images={restaurantImages}
                             currentIndex={currentImageIndex}
                             onClose={closeLightbox}
                             onNext={nextImage}
@@ -734,11 +750,18 @@ const isMealScheduleItem = (item) => (
 );
 
 const getDayHeroImage = (dayPlan) => {
-    if (dayPlan?.locationInsight?.photos?.[0]) return dayPlan.locationInsight.photos[0];
+    const dayPhotos = normalizeImages(dayPlan?.locationInsight?.photos);
+    if (dayPhotos[0]) return dayPhotos[0];
 
-    const scheduleImage = dayPlan?.schedule?.find((item) => item?.place?.images?.[0] || item?.restaurant?.images?.[0]);
-    if (scheduleImage?.place?.images?.[0]) return scheduleImage.place.images[0];
-    if (scheduleImage?.restaurant?.images?.[0]) return scheduleImage.restaurant.images[0];
+    const scheduleImage = dayPlan?.schedule?.find((item) => {
+        return normalizeImages(item?.place?.images).length > 0 || normalizeImages(item?.restaurant?.images).length > 0;
+    });
+    if (scheduleImage) {
+        const placeImages = normalizeImages(scheduleImage?.place?.images);
+        if (placeImages[0]) return placeImages[0];
+        const restImages = normalizeImages(scheduleImage?.restaurant?.images);
+        if (restImages[0]) return restImages[0];
+    }
 
     return null;
 };
